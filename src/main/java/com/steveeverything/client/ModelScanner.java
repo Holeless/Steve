@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Finds every cuboid in an entity model and records where its faces sit on the texture. */
+/** Finds every cuboid in an entity model and records where its faces sit on the texture and which way they face. */
 final class ModelScanner {
     private ModelScanner() {}
 
@@ -55,24 +55,30 @@ final class ModelScanner {
         }
 
         List<int[]> rects = new ArrayList<>();
+        List<float[]> normals = new ArrayList<>();      // one per rect: which way that face points (model space, y is down)
         for (int q = 0; q + 3 < v.size(); q += 4) {
             float u0 = Float.MAX_VALUE, u1 = -Float.MAX_VALUE, v0 = Float.MAX_VALUE, v1 = -Float.MAX_VALUE;
+            float nx = 0f, ny = 0f, nz = 0f;
             for (int k = 0; k < 4; k++) {
                 float[] p = v.get(q + k);
                 u0 = Math.min(u0, p[3]); u1 = Math.max(u1, p[3]);
                 v0 = Math.min(v0, p[4]); v1 = Math.max(v1, p[4]);
+                nx += p[5]; ny += p[6]; nz += p[7];
             }
             int[] r = {Math.round(u0 * texW), Math.round(v0 * texH), Math.round(u1 * texW), Math.round(v1 * texH)};
             if (r[2] <= r[0] || r[3] <= r[1]) continue;          // zero-area face (flat planes)
             boolean duplicate = false;
             for (int[] o : rects) if (java.util.Arrays.equals(o, r)) { duplicate = true; break; }
-            if (!duplicate) rects.add(r);
+            if (!duplicate) {
+                rects.add(r);
+                normals.add(new float[]{nx / 4f, ny / 4f, nz / 4f});
+            }
         }
         if (rects.isEmpty()) return null;
 
         return new SteveRemapper.CubeInfo(path, rects,
                 (minX + maxX) / 2f, (minY + maxY) / 2f, (minZ + maxZ) / 2f,
-                maxX - minX, maxY - minY, maxZ - minZ);
+                maxX - minX, maxY - minY, maxZ - minZ, normals);
     }
 
     // ---------------------------------------------------------------- reflection helpers

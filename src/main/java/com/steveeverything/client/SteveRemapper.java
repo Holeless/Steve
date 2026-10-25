@@ -26,7 +26,13 @@ public final class SteveRemapper {
 
     /** One cuboid of a model: its name path, its UV rectangles in pixels and its size/position in model space. */
     public record CubeInfo(String path, List<int[]> rects,
-                           float cx, float cy, float cz, float ex, float ey, float ez) {}
+                           float cx, float cy, float cz, float ex, float ey, float ez,
+                           List<float[]> normals) {
+        /** Without face normals (tests, simple callers). */
+        public CubeInfo(String path, List<int[]> rects, float cx, float cy, float cz, float ex, float ey, float ez) {
+            this(path, rects, cx, cy, cz, ex, ey, ez, null);
+        }
+    }
 
     // Slots of the standard Minecraft box-UV layout.
     static final int TOP = 0, BOTTOM = 1, RIGHT = 2, FRONT = 3, LEFT = 4, BACK = 5;
@@ -63,6 +69,8 @@ public final class SteveRemapper {
     // Face row 3 (y = 11) is plain forehead skin, used to cover up an eye that has been moved.
     private static final int EYE_Y = 12, FOREHEAD_Y = 11, EYE_LEFT_X = 9, EYE_RIGHT_X = 13;
     private static final float EYE_H = 1f / 8f;
+    /** The waist part of Steve's legs (the grey shoes at the bottom are left out). Used for the backs of animals. */
+    private static final int[] PANTS = {4, 20, 4, 8};
 
     private static int brightness(int[] steve, int sw, int sh, int x, int y) {
         double sc = sw / 64.0;
@@ -94,7 +102,7 @@ public final class SteveRemapper {
     private static final String[] SKIN_W = {"nose", "snout", "muzzle", "beak", "bill", "chin", "tongue", "mouth", "jaw", "ear",
             "horn", "antler", "eyebrow", "brow", "crest", "comb", "wattle", "trunk", "tusk", "mandible", "fang", "tooth", "teeth",
             "whisker", "tail", "tentacle", "antenna", "stinger", "spike", "thorn", "udder", "mane", "lip", "gill", "feather",
-            "tuft", "neck", "bag", "sack", "pouch", "nostril", "ridge", "plate", "scale"};
+            "tuft", "thing", "neck", "bag", "sack", "pouch", "nostril", "ridge", "plate", "scale"};
 
     private static boolean has(String[] keys, String word, boolean suffixAllowed) {
         for (String k : keys) {
@@ -206,7 +214,7 @@ public final class SteveRemapper {
     }
 
     // ------------------------------------------------------------------ step 4: keep the eyes visible
-    /** Texel range {a, b} (relative to the face, b exclusive, at least 1 wide) for a fractional range of the face. */
+    /** Texel range {a, b} (b exclusive, at least 1 wide) for a fractional range of the face. */
     private static int[] frac(float f0, float f1, int size) {
         int a = Math.max(0, Math.min(size - 1, Math.round(f0 * size)));
         int b = Math.max(a + 1, Math.min(size, Math.round(f1 * size)));
@@ -214,13 +222,28 @@ public final class SteveRemapper {
     }
 
     /**
-     * Beaks, snouts and noses are cubes sitting in front of the head's face. They often cover the spot where Steve's
-     * eyes were just painted (chicken beak, pig snout, ...). For every eye that is covered we move it: first straight up
-     * to just above the covering cube, or, when there is no room above, sideways to just beside it.
+     * Texel columns {a, b} (b exclusive) of the viewer's-left eye. Eyes are kept 2 texels wide whenever the face is at
+     * least 4 wide, so white + iris both show (narrow faces like the chicken's end up white-purple-purple-white).
+     * The right eye is the mirror image of this.
+     */
+    private static int[] eyeCols(float f0, float f1, int size) {
+        int minW = size >= 4 ? 2 : 1;
+        int a = Math.round(f0 * size);
+        a = Math.max(0, Math.min(a, (size - 2 * minW) / 2));
+        int b = Math.min(size, Math.max(Math.round(f1 * size), a + minW));
+        a = Math.max(0, Math.min(a, b - 1));
+        return new int[]{a, b};
+    }
+
+    /**
+     * Redraws Steve's eyes on a head's front face where the plain stretched copy loses them:
+     *  - narrow heads (chicken) squeeze Steve's 8-wide face, which eats the white of the eye;
+     *  - beaks, snouts and noses are cubes sticking out in front of the face and can hide the eyes (chicken, pig...).
+     * A covered eye is moved straight up to just above the covering cube, or sideways to just beside it.
      * Fractions below are of the head's front face: x from the viewer's left, y from the top.
      */
-    private static void relocateEyes(int[] out, int w, int h, int idx, List<CubeInfo> cubes, Kind[] kinds,
-                                     int[] fr, int[] steve, int sw, int sh) {
+    private static void fixEyes(int[] out, int w, int h, int idx, List<CubeInfo> cubes, Kind[] kinds,
+                                int[] fr, int[] steve, int sw, int sh) {
         CubeInfo head = cubes.get(idx);
         int dw = fr[2] - fr[0], dh = fr[3] - fr[1];
         if (dw < 2 || dh < 2 || head.ex() <= 0f || head.ey() <= 0f) return;
@@ -242,7 +265,8 @@ public final class SteveRemapper {
             float fy1 = fy0 + s.ey() / head.ey();
             if (fx1 > 0.02f && fx0 < 0.98f && fy1 > 0.02f && fy0 < 0.98f) occluders.add(new float[]{fx0, fx1, fy0, fy1});
         }
-        if (occluders.isEmpty()) return;
+        boolean squeezed = dw < 8;
+        if (occluders.isEmpty() && !squeezed) return;
 
         float eyeH = Math.max(EYE_H, 1f / dh);
         final float eyeX0 = 1f / 8f, eyeX1 = 3f / 8f, eyeY0 = 4f / 8f, eyeY1 = 5f / 8f;   // the left eye; the right one is its mirror
@@ -254,21 +278,24 @@ public final class SteveRemapper {
                 float ox0 = mirror ? 1f - o[1] : o[0], ox1 = mirror ? 1f - o[0] : o[1];
                 if (ox0 < eyeX1 && ox1 > eyeX0 && o[2] < eyeY1 && o[3] > eyeY0) { hit = new float[]{ox0, ox1, o[2], o[3]}; break; }
             }
-            if (hit == null) continue;
 
             float nx0 = eyeX0, nx1 = eyeX1, ny0 = eyeY0, ny1 = eyeY1;
-            float top1 = hit[2], top0 = top1 - eyeH;
-            if (top0 >= 0f) { ny0 = top0; ny1 = top1; }                                  // above the beak/snout
-            else if (hit[0] - (eyeX1 - eyeX0) >= 0f) { nx1 = hit[0]; nx0 = nx1 - (eyeX1 - eyeX0); }   // beside it
-            else continue;                                                               // nowhere to go
+            if (hit != null) {
+                float top1 = hit[2], top0 = top1 - eyeH;
+                if (top0 >= 0f) { ny0 = top0; ny1 = top1; }                                  // above the beak/snout
+                else if (hit[0] - (eyeX1 - eyeX0) >= 0f) { nx1 = hit[0]; nx0 = nx1 - (eyeX1 - eyeX0); }   // beside it
+                else if (!squeezed) continue;                                                // nowhere to go
+            }
 
-            int[] ox = frac(eyeX0, eyeX1, dw), oy = frac(eyeY0, eyeY1, dh);
-            int[] nxr = frac(nx0, nx1, dw), nyr = frac(ny0, ny1, dh);
+            // erase the old (stretched) eye completely, then draw the new one
+            int ox0 = (int) Math.floor(eyeX0 * dw), ox1 = Math.min(dw, Math.max(ox0 + 1, (int) Math.ceil(eyeX1 * dw)));
+            int oy0 = (int) Math.floor(eyeY0 * dh), oy1 = Math.min(dh, Math.max(oy0 + 1, (int) Math.ceil(eyeY1 * dh)));
+            int[] nxr = eyeCols(nx0, nx1, dw), nyr = frac(ny0, ny1, dh);
             if (mirror) {
-                ox = new int[]{dw - ox[1], dw - ox[0]};
+                int t = ox0; ox0 = dw - ox1; ox1 = dw - t;
                 nxr = new int[]{dw - nxr[1], dw - nxr[0]};
             }
-            int[] oldBox = {fr[0] + ox[0], fr[1] + oy[0], fr[0] + ox[1], fr[1] + oy[1]};
+            int[] oldBox = {fr[0] + ox0, fr[1] + oy0, fr[0] + ox1, fr[1] + oy1};
             int[] newBox = {fr[0] + nxr[0], fr[1] + nyr[0], fr[0] + nxr[1], fr[1] + nyr[1]};
             paint(out, w, h, oldBox, new int[]{mirror ? EYE_RIGHT_X : EYE_LEFT_X, FOREHEAD_Y, 2, 1}, steve, sw, sh);
             paint(out, w, h, newBox, eyeSource(!mirror, newBox[2] - newBox[0], steve, sw, sh), steve, sw, sh);
@@ -298,12 +325,18 @@ public final class SteveRemapper {
         Map<String, Float> biggest = new HashMap<>();
         for (CubeInfo c : cubes) biggest.merge(c.path(), volume(c), Math::max);
 
+        float maxVolume = 0f;
+        for (CubeInfo c : cubes) maxVolume = Math.max(maxVolume, volume(c));
+
         int n = cubes.size();
         Kind[] kinds = new Kind[n];
         for (int i = 0; i < n; i++) {
             CubeInfo c = cubes.get(i);
             Kind kind = classifyByName(c.path());
+            boolean named = kind != null;
             if (kind == null) kind = classifyByGeometry(c, minY, maxY);
+            // an unnamed tiny cube (chicken "red_thing", odd mod parts) is an add-on like a wattle: bare skin
+            if (!named && volume(c) < 0.035f * maxVolume) kind = Kind.SKIN;
             if ((kind == Kind.HEAD || kind == Kind.BODY) && volume(c) < 0.12f * biggest.get(c.path())) {
                 kind = Kind.SKIN;
             }
@@ -315,6 +348,8 @@ public final class SteveRemapper {
             Kind kind = kinds[i];
             int[] slots = classifySlots(c.rects());
             int frontIndex = -1;
+            // a body lying on its side (cow, pig, sheep, chicken...): its upward-facing side is the animal's back
+            boolean lyingBody = kind == Kind.BODY && Math.max(c.ex(), c.ez()) > 1.15f * c.ey();
             for (int k = 0; k < c.rects().size(); k++) {
                 int[] r = c.rects().get(k);
                 int slot = slots[k];
@@ -328,9 +363,12 @@ public final class SteveRemapper {
                 if (kind == Kind.HEAD && slot == FRONT && frontIndex < 0) frontIndex = k;
 
                 int[] src = steveRect(kind, slot);
+                boolean dorsal = lyingBody && c.normals() != null && k < c.normals().size() && c.normals().get(k)[1] < -0.5f;
                 // Steve's top/bottom strips are tiny (8x4). On animals the large back/belly is often a "top" or
                 // "bottom" face, so when the target is much bigger, borrow the big front/back face instead.
-                if (kind != Kind.HEAD && kind != Kind.HAT && kind != Kind.SKIN && (slot == TOP || slot == BOTTOM)) {
+                if (dorsal) {
+                    src = PANTS;                                   // backs are pants, not shirt
+                } else if (kind != Kind.HEAD && kind != Kind.HAT && kind != Kind.SKIN && (slot == TOP || slot == BOTTOM)) {
                     long dest = (long) (r[2] - r[0]) * (r[3] - r[1]);
                     long have = (long) src[2] * src[3];
                     if (dest > 2 * have) src = steveRect(kind, slot == TOP ? FRONT : BACK);
@@ -338,7 +376,7 @@ public final class SteveRemapper {
                 paint(out, w, h, r, src, steve, sw, sh);
             }
             if (kind == Kind.HEAD && frontIndex >= 0) {
-                relocateEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex), steve, sw, sh);
+                fixEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex), steve, sw, sh);
             }
         }
         return out;
