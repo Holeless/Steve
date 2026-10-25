@@ -503,12 +503,17 @@ public final class SteveRemapper {
     }
 
     public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh, boolean allHeads) {
-        return remap(cubes, w, h, steve, sw, sh, allHeads, false);
+        return remap(cubes, w, h, steve, sw, sh, allHeads, 0);
     }
 
-    /** @param plainBody true = every body cube is plain shirt on every face (allay: no pants, no neck, no belt) */
+    /**
+     * @param bodyMode 0 = normal; 1 = shirt on the butt and top too, painted last so other parts' overlapping UVs
+     *                 can't leak into them (armadillo); 2 = every body face plain shirt (allay)
+     */
     public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh,
-                              boolean allHeads, boolean plainBody) {
+                              boolean allHeads, int bodyMode) {
+        boolean plainBody = bodyMode == 2, shirtButt = bodyMode >= 1;
+        List<int[][]> late = new ArrayList<>();
         int[] out = new int[w * h];
         if (cubes.isEmpty()) return out;
 
@@ -573,13 +578,16 @@ public final class SteveRemapper {
                 if (kind == Kind.HEAD && slot == LEFT && leftIndex < 0) leftIndex = k;
 
                 int[] src = steveRect(kind, slot);
-                boolean dorsal = lyingBody && c.normals() != null && k < c.normals().size() && c.normals().get(k)[2] > 0.5f;
+                boolean dorsalFace = lyingBody && c.normals() != null && k < c.normals().size() && c.normals().get(k)[2] > 0.5f;
+                boolean dorsal = dorsalFace && !shirtButt;
                 // Steve's top/bottom strips are tiny (8x4). On animals the large back/belly is often a "top" or
                 // "bottom" face, so when the target is much bigger, borrow the big front/back face instead.
                 if (plainBody && kind == Kind.BODY) {
                     src = steveRect(kind, FRONT);
                 } else if (dorsal) {
-                    src = PANTS;                                   // the butt is pants, not shirt
+                    src = PANTS;
+                } else if (kind == Kind.BODY && shirtButt && dorsalFace) {
+                    src = steveRect(kind, FRONT);                  // the butt is plain shirt                                   // the butt is pants, not shirt
                 } else if (kind == Kind.BODY && (slot == TOP || slot == BOTTOM)) {
                     // Steve's torso top has his neck on it; animals shouldn't wear that, so use plain shirt instead
                     src = steveRect(kind, slot == TOP ? FRONT : BACK);
@@ -589,6 +597,7 @@ public final class SteveRemapper {
                     if (dest > 2 * have) src = steveRect(kind, slot == TOP ? FRONT : BACK);
                 }
                 paint(out, w, h, r, src, steve, sw, sh);
+                if (kind == Kind.BODY && shirtButt && (slot == TOP || dorsalFace)) late.add(new int[][]{r, src});
             }
             if (kind == Kind.HEAD && frontIndex >= 0) {
                 fixEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex),
@@ -596,6 +605,7 @@ public final class SteveRemapper {
                         leftIndex >= 0 ? c.rects().get(leftIndex) : null, steve, sw, sh);
             }
         }
+        for (int[][] l : late) paint(out, w, h, l[0], l[1], steve, sw, sh);
         return out;
     }
 }
