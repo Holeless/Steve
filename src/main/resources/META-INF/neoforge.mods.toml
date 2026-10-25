@@ -9,7 +9,8 @@ displayName = "Steve Everything"
 description = '''
 Every mob is re-skinned as Steve. The skin is remapped onto each mob's own model at runtime:
 heads get Steve's head, bodies his torso, legs his legs, wings and fins his arms.
-Client-side only.
+Mobs that drop meat drop Raw Steve instead, which cooks into Cooked Steve.
+The re-skinning is client-side; the meat drops need the mod on the server too.
 '''
 
 [[dependencies.steveeverything]]
@@ -17,11 +18,11 @@ modId = "neoforge"
 type = "required"
 versionRange = "[21.1.0,)"
 ordering = "NONE"
-side = "CLIENT"
+side = "BOTH"
 
 [[dependencies.steveeverything]]
 modId = "minecraft"
 type = "required"
 versionRange = "[1.21.1,1.21.2)"
 ordering = "NONE"
-side = "CLIENT"
+side = "BOTH"

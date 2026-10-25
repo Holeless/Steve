@@ -1,0 +1,8 @@
+{
+  "type": "minecraft:smelting",
+  "category": "food",
+  "cookingtime": 200,
+  "experience": 0.35,
+  "ingredient": { "item": "steveeverything:raw_steve" },
+  "result": { "id": "steveeverything:cooked_steve" }
+}
