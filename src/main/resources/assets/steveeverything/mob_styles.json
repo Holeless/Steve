@@ -3,6 +3,6 @@
   "minecraft:turtle":    { "head": "mini", "body": "belly_pants" },
   "minecraft:allay":     { "head": "mini", "body": "plain", "parts": { "wing": "sleeve" } },
   "minecraft:armadillo": { "head": "mini", "body": "belly_pants", "parts": { "ear": "skin", "tail": "skin" } },
-  "minecraft:bee":       { "head": "front", "body": "plain" },
+  "minecraft:bee":       { "head": "front", "body": "plain", "parts": { "wing": "skin", "leg": "shoe" } },
   "minecraft:axolotl":   { "body": "belly_pants", "parts": { "gill": "skin", "tail": "skin" } }
 }

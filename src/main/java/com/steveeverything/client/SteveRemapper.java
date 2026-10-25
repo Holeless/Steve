@@ -24,7 +24,7 @@ import java.util.Set;
 public final class SteveRemapper {
     private SteveRemapper() {}
 
-    public enum Kind { HEAD, HAT, BODY, ARM, LEG, SKIN, EYE }
+    public enum Kind { HEAD, HAT, BODY, ARM, LEG, SKIN, EYE, SHOE }
 
     /**
      * Per-mob tweaks (loaded from mob_styles.json).
@@ -55,7 +55,7 @@ public final class SteveRemapper {
         if (path == null || parts == null || parts.isEmpty()) return null;
         String p = path.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT);
         List<String> words = Arrays.asList(p.split("[^a-z]+"));
-        for (Map.Entry<String, Kind> e : parts.entrySet()) if (words.contains(e.getKey())) return e.getValue();
+        for (Map.Entry<String, Kind> e : parts.entrySet()) if (words.contains(e.getKey()) || words.contains(e.getKey() + "s")) return e.getValue();
         return null;
     }
 
@@ -93,13 +93,14 @@ public final class SteveRemapper {
             case HAT -> new int[]{32, 0, 8, 8, 8};     // second layer; transparent on the classic Steve skin
             case BODY -> new int[]{16, 16, 8, 12, 4};
             case ARM, SKIN -> new int[]{40, 16, 4, 12, 4};
-            case LEG -> new int[]{0, 16, 4, 12, 4};
+            case LEG, SHOE -> new int[]{0, 16, 4, 12, 4};
         };
     }
 
     /** Rectangle {x, y, w, h} on the skin for a body part and box slot. */
     static int[] steveRect(Kind k, int slot) {
         if (k == Kind.SKIN) return new int[]{44, 26, 4, 6}; // lower front of the arm = bare skin
+        if (k == Kind.SHOE) return new int[]{4, 29, 4, 2};  // two plain rows of the shoe
         int[] b = box(k);
         int u = b[0], v = b[1], w = b[2], h = b[3], d = b[4];
         return switch (slot) {
