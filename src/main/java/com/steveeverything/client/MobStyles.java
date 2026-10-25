@@ -56,6 +56,7 @@ final class MobStyles {
 
     private static SteveRemapper.Style parse(JsonObject o) {
         boolean mini = "mini".equals(str(o, "head"));
+        boolean front = "front".equals(str(o, "head"));
         int body = switch (str(o, "body")) {
             case "shirt_butt" -> 1;
             case "plain" -> 2;
@@ -75,7 +76,7 @@ final class MobStyles {
                 }
             }
         }
-        return new SteveRemapper.Style(mini, body, parts);
+        return new SteveRemapper.Style(mini, body, parts, front);
     }
 
     private static String str(JsonObject o, String key) {

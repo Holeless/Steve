@@ -119,6 +119,17 @@ public final class SteveClient {
         layer.addTargets(cubes);
     }
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void attachFrontHead(LivingEntityRenderer renderer, ModelPart.Cube cube) {
+        MiniHeadLayer layer = MINI.get(renderer);
+        if (layer == null) {
+            layer = new MiniHeadLayer(renderer);
+            MINI.put(renderer, layer);
+            renderer.addLayer(layer);
+        }
+        layer.addFronts(Set.of(cube));
+    }
+
     // ------------------------------------------------------------------ the work
     private static void steveify(ResourceLocation texture, LivingEntityRenderer<?, ?> renderer, String mobId) throws Exception {
         Minecraft mc = Minecraft.getInstance();
@@ -149,6 +160,9 @@ public final class SteveClient {
             for (int i : miniIndices) miniCubes.add(scan.refs().get(i));
             attachMiniHeads(renderer, miniCubes);
         }
+
+        int frontIdx = SteveRemapper.frontHeadCube(cubes, style);
+        if (frontIdx >= 0) attachFrontHead(renderer, scan.refs().get(frontIdx));
 
         int[] pixels = SteveRemapper.remap(cubes, w, h, stevePixels, steveW, steveH, style);
         NativeImage result = new NativeImage(w, h, true);

@@ -32,8 +32,22 @@ public final class SteveRemapper {
      * bodyMode: 0 = default, 1 = shirt butt/top, 2 = plain shirt everywhere, 3 = shirt on top/sides/ends, pants on the belly.
      * parts: part-name word -> body part it must look like ("ear" -> SKIN ...). Beats the automatic name matching.
      */
-    public record Style(boolean allHeads, int bodyMode, Map<String, Kind> parts) {
-        public static final Style DEFAULT = new Style(false, 0, Map.of());
+    public record Style(boolean allHeads, int bodyMode, Map<String, Kind> parts, boolean frontHead) {
+        public static final Style DEFAULT = new Style(false, 0, Map.of(), false);
+    }
+
+    /** Index of the cube that gets a mini Steve head stuck on its front (style "head": "front"), or -1. */
+    public static int frontHeadCube(List<CubeInfo> cubes, Style style) {
+        if (!style.frontHead()) return -1;
+        Kind[] kinds = classifyAll(cubes, style.parts());
+        int best = -1;
+        float bestVol = 0f;
+        for (int i = 0; i < cubes.size(); i++) {
+            if (kinds[i] != Kind.BODY) continue;
+            float vol = volume(cubes.get(i));
+            if (vol > bestVol) { bestVol = vol; best = i; }
+        }
+        return best;
     }
 
     /** Forced body part for a cube path from a Style's part table, or null. */
@@ -153,6 +167,8 @@ public final class SteveRemapper {
     private static final float EYE_H = 1f / 8f;
     /** The waist part of Steve's legs (the grey shoes at the bottom are left out). Used for the rear end of animals. */
     private static final int[] PANTS = {4, 20, 4, 8};
+    /** Two plain rows of Steve's trousers (no belt line, no shoes). */
+    private static final int[] PANTS_STRIP = {4, 22, 4, 2};
 
     private static int brightness(int[] steve, int sw, int sh, int x, int y) {
         double sc = sw / 64.0;
@@ -590,7 +606,7 @@ public final class SteveRemapper {
      */
     public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh,
                               boolean allHeads, int bodyMode) {
-        return remap(cubes, w, h, steve, sw, sh, new Style(allHeads, bodyMode, Map.of()));
+        return remap(cubes, w, h, steve, sw, sh, new Style(allHeads, bodyMode, Map.of(), false));
     }
 
     public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh, Style style) {
@@ -696,7 +712,14 @@ public final class SteveRemapper {
                     if (dest > 2 * have) src = steveRect(kind, slot == TOP ? FRONT : BACK);
                 }
                 paint(out, w, h, r, src, steve, sw, sh);
-                if (kind == Kind.BODY && shirtButt && (bodyMode == 3 || slot == TOP || dorsalFace)) late.add(new int[][]{r, src});
+                if (kind == Kind.BODY && shirtButt) {
+                    late.add(new int[][]{r, src});
+                    // shell-style bodies: the bottom two pixel rows of every side face are pants blue
+                    if (bodyMode == 3 && (slot == RIGHT || slot == FRONT || slot == LEFT || slot == BACK)) {
+                        int rows = Math.min(2, Math.max(1, (r[3] - r[1]) / 2));
+                        late.add(new int[][]{{r[0], r[3] - rows, r[2], r[3]}, PANTS_STRIP});
+                    }
+                }
             }
             if (kind == Kind.HEAD && frontIndex >= 0) {
                 fixEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex),

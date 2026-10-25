@@ -42,6 +42,8 @@ final class MiniHeadLayer<T extends LivingEntity, M extends EntityModel<T>> exte
     private static ModelPart head;
 
     private final Set<ModelPart.Cube> targets = new HashSet<>();
+    /** Cubes that keep their look but get a mini head stuck on their front (bee). */
+    private final Set<ModelPart.Cube> fronts = new HashSet<>();
     private final Map<Object, List<ModelPart>> roots = new WeakHashMap<>();
 
     MiniHeadLayer(RenderLayerParent<T, M> parent) {
@@ -60,6 +62,10 @@ final class MiniHeadLayer<T extends LivingEntity, M extends EntityModel<T>> exte
         targets.addAll(cubes);
     }
 
+    void addFronts(Collection<ModelPart.Cube> cubes) {
+        fronts.addAll(cubes);
+    }
+
     private static ModelPart head() {
         if (head == null) {
             MeshDefinition mesh = new MeshDefinition();
@@ -75,7 +81,7 @@ final class MiniHeadLayer<T extends LivingEntity, M extends EntityModel<T>> exte
     public void render(PoseStack poseStack, MultiBufferSource buffer, int packedLight, T entity,
                        float limbSwing, float limbSwingAmount, float partialTick, float ageInTicks,
                        float netHeadYaw, float headPitch) {
-        if (targets.isEmpty() || entity.isInvisible()) return;
+        if ((targets.isEmpty() && fronts.isEmpty()) || entity.isInvisible()) return;
 
         ModelPart mini = head();
         List<ModelPart> parts = roots.computeIfAbsent(getParentModel(), ModelScanner::rootParts);
@@ -86,12 +92,15 @@ final class MiniHeadLayer<T extends LivingEntity, M extends EntityModel<T>> exte
         for (ModelPart part : parts) {
             // visit() applies each part's current (animated) pose to the stack and hands us every cube in it
             part.visit(poseStack, (pose, path, index, cube) -> {
-                if (!targets.contains(cube) || !seen.add(cube)) return;
+                if ((!targets.contains(cube) && !fronts.contains(cube)) || !seen.add(cube)) return;
                 float dx = cube.maxX - cube.minX, dy = cube.maxY - cube.minY, dz = cube.maxZ - cube.minZ;
-                float side = Math.max(MIN_SIDE, Math.min(MAX_SIDE, (dx + dy + dz) / 3f));
+                boolean replaceCube = targets.contains(cube);
+                float side = replaceCube ? Math.max(MIN_SIDE, Math.min(MAX_SIDE, (dx + dy + dz) / 3f))
+                        : Math.max(MIN_SIDE, Math.min(MAX_SIDE, Math.min(dx, dy) * 0.75f));
                 float k = side / 8f;
                 poseStack.pushPose();
-                poseStack.translate((cube.minX + cube.maxX) / 32f, (cube.minY + cube.maxY) / 32f, (cube.minZ + cube.maxZ) / 32f);
+                poseStack.translate((cube.minX + cube.maxX) / 32f, (cube.minY + cube.maxY) / 32f,
+                        replaceCube ? (cube.minZ + cube.maxZ) / 32f : (cube.minZ - side / 2f + 1f) / 16f);   // mob faces -z
                 poseStack.scale(k, k, k);
                 mini.render(poseStack, consumer, packedLight, overlay);
                 poseStack.popPose();
