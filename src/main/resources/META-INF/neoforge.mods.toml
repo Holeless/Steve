@@ -1,0 +1,27 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "MIT"
+
+[[mods]]
+modId = "steveeverything"
+version = "1.0.0"
+displayName = "Steve Everything"
+description = '''
+Every mob is re-skinned as Steve. The skin is remapped onto each mob's own model at runtime:
+heads get Steve's head, bodies his torso, legs his legs, wings and fins his arms.
+Client-side only.
+'''
+
+[[dependencies.steveeverything]]
+modId = "neoforge"
+type = "required"
+versionRange = "[21.1.0,)"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.steveeverything]]
+modId = "minecraft"
+type = "required"
+versionRange = "[1.21.1,1.21.2)"
+ordering = "NONE"
+side = "CLIENT"
