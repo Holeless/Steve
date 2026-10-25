@@ -3,9 +3,11 @@ package com.steveeverything.client;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The "basic algorithm". Pure Java, no Minecraft classes, so it is easy to test.
@@ -280,7 +282,7 @@ public final class SteveRemapper {
     private static int[] eyeCols(float f0, float f1, int size) {
         int minW = size >= 4 ? 2 : 1;
         int a = Math.round(f0 * size);
-        a = Math.max(0, Math.min(a, (size - 2 * minW) / 2));
+        a = Math.max(0, Math.min(a, (size - 2 * minW - 2) / 2));   // leave a gap of 2 between the eyes if there is room
         int b = Math.min(size, Math.max(Math.round(f1 * size), a + minW));
         a = Math.max(0, Math.min(a, b - 1));
         return new int[]{a, b};
@@ -368,19 +370,8 @@ public final class SteveRemapper {
         }
     }
 
-    /**
-     * Build a Steve-ified version of a mob texture.
-     *
-     * @param cubes every cuboid of the mob's model
-     * @param w     width of the mob's original texture
-     * @param h     height of the mob's original texture
-     * @param steve Steve's skin pixels (any 4-byte pixel format; they are copied untouched)
-     * @return a w*h pixel array; areas the model never uses stay 0 (transparent)
-     */
-    public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh) {
-        int[] out = new int[w * h];
-        if (cubes.isEmpty()) return out;
-
+    // ------------------------------------------------------------------ which body part is every cube?
+    static Kind[] classifyAll(List<CubeInfo> cubes) {
         float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         for (CubeInfo c : cubes) {
             minY = Math.min(minY, c.cy() - c.ey() / 2f);
@@ -394,13 +385,8 @@ public final class SteveRemapper {
         float maxVolume = 0f;
         for (CubeInfo c : cubes) maxVolume = Math.max(maxVolume, volume(c));
 
-        float midX = 0f, midY = 0f, midZ = 0f;
-        for (CubeInfo c : cubes) { midX += c.cx(); midY += c.cy(); midZ += c.cz(); }
-        midX /= cubes.size(); midY /= cubes.size(); midZ /= cubes.size();
-
-        int n = cubes.size();
-        Kind[] kinds = new Kind[n];
-        for (int i = 0; i < n; i++) {
+        Kind[] kinds = new Kind[cubes.size()];
+        for (int i = 0; i < kinds.length; i++) {
             CubeInfo c = cubes.get(i);
             Kind kind = classifyByName(c.path());
             boolean named = kind != null;
@@ -412,10 +398,83 @@ public final class SteveRemapper {
             }
             kinds[i] = kind;
         }
+        return kinds;
+    }
+
+    // ------------------------------------------------------------------ heads that are too small for Steve's face
+    private static final float POOR_HEAD_MIN = 3f / 16f;      // blocks: a head thinner than this can't show a face
+    private static final float SMALL_MODEL = 12f / 16f;       // blocks: head-less models up to this size get a mini head
+
+    /** Indices of cubes that should be hidden and replaced by a mini Steve head drawn by a render layer. */
+    public static Set<Integer> miniHeadCubes(List<CubeInfo> cubes) {
+        return miniHeadCubes(cubes, classifyAll(cubes));
+    }
+
+    static Set<Integer> miniHeadCubes(List<CubeInfo> cubes, Kind[] kinds) {
+        Set<Integer> out = new HashSet<>();
+        boolean namedHead = false;
+        for (int i = 0; i < cubes.size(); i++) {
+            CubeInfo c = cubes.get(i);
+            if (classifyByName(c.path()) != Kind.HEAD) continue;
+            namedHead = true;
+            if (kinds[i] != Kind.HEAD) continue;
+            // cod, salmon, parrot...: a face that is tiny or very long and thin turns Steve's face into mush
+            float lo = Math.min(c.ex(), c.ey()), hi = Math.max(c.ex(), c.ey());
+            if (lo < POOR_HEAD_MIN - 0.001f || hi > 2f * lo + 0.001f) out.add(i);
+        }
+        if (namedHead) return out;
+
+        // No head at all (endermite, silverfish...): on a small model the frontmost mid-sized segment becomes the head.
+        float x0 = Float.MAX_VALUE, x1 = -Float.MAX_VALUE, y0 = Float.MAX_VALUE, y1 = -Float.MAX_VALUE;
+        float z0 = Float.MAX_VALUE, z1 = -Float.MAX_VALUE, maxVolume = 0f;
+        for (CubeInfo c : cubes) {
+            x0 = Math.min(x0, c.cx() - c.ex() / 2f); x1 = Math.max(x1, c.cx() + c.ex() / 2f);
+            y0 = Math.min(y0, c.cy() - c.ey() / 2f); y1 = Math.max(y1, c.cy() + c.ey() / 2f);
+            z0 = Math.min(z0, c.cz() - c.ez() / 2f); z1 = Math.max(z1, c.cz() + c.ez() / 2f);
+            maxVolume = Math.max(maxVolume, volume(c));
+        }
+        if (Math.max(x1 - x0, Math.max(y1 - y0, z1 - z0)) > SMALL_MODEL) return out;
+
+        int best = -1;
+        float bestFront = Float.MAX_VALUE;
+        for (int i = 0; i < cubes.size(); i++) {
+            if (kinds[i] == Kind.EYE || kinds[i] == Kind.SKIN) continue;
+            CubeInfo c = cubes.get(i);
+            float vol = volume(c);
+            if (vol < 0.12f * maxVolume || vol > 0.6f * maxVolume) continue;     // not a tiny antenna, not the main body
+            float front = c.cz() - c.ez() / 2f;                                   // the mob faces -z
+            if (front < bestFront) { bestFront = front; best = i; }
+        }
+        if (best >= 0) out.add(best);
+        return out;
+    }
+
+    /**
+     * Build a Steve-ified version of a mob texture.
+     *
+     * @param cubes every cuboid of the mob's model
+     * @param w     width of the mob's original texture
+     * @param h     height of the mob's original texture
+     * @param steve Steve's skin pixels (any 4-byte pixel format; they are copied untouched)
+     * @return a w*h pixel array; areas the model never uses stay 0 (transparent)
+     */
+    public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh) {
+        int[] out = new int[w * h];
+        if (cubes.isEmpty()) return out;
+
+        Kind[] kinds = classifyAll(cubes);
+        Set<Integer> mini = miniHeadCubes(cubes, kinds);     // these get a mini Steve head layer instead, so stay transparent
+
+        float midX = 0f, midY = 0f, midZ = 0f;
+        for (CubeInfo c : cubes) { midX += c.cx(); midY += c.cy(); midZ += c.cz(); }
+        midX /= cubes.size(); midY /= cubes.size(); midZ /= cubes.size();
+
+        int n = cubes.size();
 
         for (int i = 0; i < n; i++) {
             CubeInfo c = cubes.get(i);
             Kind kind = kinds[i];
+            if (mini.contains(i)) continue;
             int[] slots = classifySlots(c.rects());
             int frontIndex = -1;
             // a body lying on its side (cow, pig, sheep, chicken...): its rear end (the face pointing +z) gets the pants

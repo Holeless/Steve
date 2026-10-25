@@ -18,7 +18,21 @@ import java.util.Set;
 final class ModelScanner {
     private ModelScanner() {}
 
-    static List<SteveRemapper.CubeInfo> scan(Object model, int texW, int texH) {
+    /** The cubes' info plus the actual ModelPart.Cube objects, in the same order. */
+    record Result(List<SteveRemapper.CubeInfo> cubes, List<ModelPart.Cube> refs) {}
+
+    /** Every top-level ModelPart of a model, "root" first (the order scan() walks them in). */
+    static List<ModelPart> rootParts(Object model) {
+        Map<String, ModelPart> roots = new LinkedHashMap<>();
+        collectParts(model, roots);
+        List<Map.Entry<String, ModelPart>> ordered = new ArrayList<>(roots.entrySet());
+        ordered.sort(Comparator.comparingInt(e -> e.getKey().equals("root") ? 0 : 1));
+        List<ModelPart> parts = new ArrayList<>();
+        for (Map.Entry<String, ModelPart> e : ordered) parts.add(e.getValue());
+        return parts;
+    }
+
+    static Result scan(Object model, int texW, int texH) {
         // 1. find the model's ModelParts (mods and vanilla keep them in plain fields)
         Map<String, ModelPart> roots = new LinkedHashMap<>();
         collectParts(model, roots);
@@ -29,6 +43,7 @@ final class ModelScanner {
         // 2. walk each tree; ModelPart#visit gives us every cube plus its name path and pose
         Set<ModelPart.Cube> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         List<SteveRemapper.CubeInfo> result = new ArrayList<>();
+        List<ModelPart.Cube> refs = new ArrayList<>();
         for (Map.Entry<String, ModelPart> entry : ordered) {
             String prefix = entry.getKey();
             entry.getValue().visit(new PoseStack(), (pose, path, index, cube) -> {
@@ -36,10 +51,10 @@ final class ModelScanner {
                 QuadRecorder recorder = new QuadRecorder();
                 cube.compile(pose, recorder, 0, 0, -1);
                 SteveRemapper.CubeInfo info = toInfo(prefix + "/" + path, recorder, texW, texH);
-                if (info != null) result.add(info);
+                if (info != null) { result.add(info); refs.add(cube); }
             });
         }
-        return result;
+        return new Result(result, refs);
     }
 
     private static SteveRemapper.CubeInfo toInfo(String path, QuadRecorder rec, int texW, int texH) {
