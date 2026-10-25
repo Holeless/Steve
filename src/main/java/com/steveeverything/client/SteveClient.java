@@ -16,6 +16,7 @@ import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.animal.Sheep;
+import net.minecraft.world.entity.animal.allay.Allay;
 import net.minecraft.world.entity.animal.Turtle;
 import net.minecraft.world.entity.monster.Spider;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -82,13 +83,14 @@ public final class SteveClient {
         if (living instanceof Spider) removeSpiderEyes(renderer);   // spider + cave spider only; the enderman's eyes stay
 
         // mobs whose head always becomes a properly sized mini Steve head (so the eyes are never squashed)
-        boolean customHead = living instanceof Sheep || living instanceof Turtle;
+        boolean customHead = living instanceof Sheep || living instanceof Turtle || living instanceof Allay;
+        boolean plainBody = living instanceof Allay;
 
         ResourceLocation texture = null;
         try {
             texture = renderer.getTextureLocation(entity);
             if (texture == null || !DONE.add(texture)) return;
-            steveify(texture, renderer, customHead);
+            steveify(texture, renderer, customHead, plainBody);
         } catch (Throwable t) {
             LOGGER.warn("Could not turn {} into Steve; leaving it vanilla", texture, t);
         }
@@ -121,7 +123,7 @@ public final class SteveClient {
     }
 
     // ------------------------------------------------------------------ the work
-    private static void steveify(ResourceLocation texture, LivingEntityRenderer<?, ?> renderer, boolean customHead) throws Exception {
+    private static void steveify(ResourceLocation texture, LivingEntityRenderer<?, ?> renderer, boolean customHead, boolean plainBody) throws Exception {
         Minecraft mc = Minecraft.getInstance();
         ResourceManager resources = mc.getResourceManager();
 
@@ -148,7 +150,7 @@ public final class SteveClient {
             attachMiniHeads(renderer, miniCubes);
         }
 
-        int[] pixels = SteveRemapper.remap(cubes, w, h, stevePixels, steveW, steveH, customHead);
+        int[] pixels = SteveRemapper.remap(cubes, w, h, stevePixels, steveW, steveH, customHead, plainBody);
         NativeImage result = new NativeImage(w, h, true);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
