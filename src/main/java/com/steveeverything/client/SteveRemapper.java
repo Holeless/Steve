@@ -69,7 +69,7 @@ public final class SteveRemapper {
     // Face row 3 (y = 11) is plain forehead skin, used to cover up an eye that has been moved.
     private static final int EYE_Y = 12, FOREHEAD_Y = 11, EYE_LEFT_X = 9, EYE_RIGHT_X = 13;
     private static final float EYE_H = 1f / 8f;
-    /** The waist part of Steve's legs (the grey shoes at the bottom are left out). Used for the backs of animals. */
+    /** The waist part of Steve's legs (the grey shoes at the bottom are left out). Used for the rear end of animals. */
     private static final int[] PANTS = {4, 20, 4, 8};
 
     private static int brightness(int[] steve, int sw, int sh, int x, int y) {
@@ -89,6 +89,13 @@ public final class SteveRemapper {
         if (destWidth >= 2) return new int[]{x, EYE_Y, 2, 1};
         boolean firstDarker = brightness(steve, sw, sh, x, EYE_Y) <= brightness(steve, sw, sh, x + 1, EYE_Y);
         return new int[]{firstDarker ? x : x + 1, EYE_Y, 1, 1};
+    }
+
+    /** Source rectangle for just the white of one eye (the brighter of its two pixels). */
+    static int[] eyeWhite(boolean viewerLeft, int[] steve, int sw, int sh) {
+        int x = viewerLeft ? EYE_LEFT_X : EYE_RIGHT_X;
+        boolean firstBrighter = brightness(steve, sw, sh, x, EYE_Y) >= brightness(steve, sw, sh, x + 1, EYE_Y);
+        return new int[]{firstBrighter ? x : x + 1, EYE_Y, 1, 1};
     }
 
     // ------------------------------------------------------------------ step 1: which body part?
@@ -243,7 +250,7 @@ public final class SteveRemapper {
      * Fractions below are of the head's front face: x from the viewer's left, y from the top.
      */
     private static void fixEyes(int[] out, int w, int h, int idx, List<CubeInfo> cubes, Kind[] kinds,
-                                int[] fr, int[] steve, int sw, int sh) {
+                                int[] fr, int[] rightRect, int[] leftRect, int[] steve, int sw, int sh) {
         CubeInfo head = cubes.get(idx);
         int dw = fr[2] - fr[0], dh = fr[3] - fr[1];
         if (dw < 2 || dh < 2 || head.ex() <= 0f || head.ey() <= 0f) return;
@@ -298,7 +305,22 @@ public final class SteveRemapper {
             int[] oldBox = {fr[0] + ox0, fr[1] + oy0, fr[0] + ox1, fr[1] + oy1};
             int[] newBox = {fr[0] + nxr[0], fr[1] + nyr[0], fr[0] + nxr[1], fr[1] + nyr[1]};
             paint(out, w, h, oldBox, new int[]{mirror ? EYE_RIGHT_X : EYE_LEFT_X, FOREHEAD_Y, 2, 1}, steve, sw, sh);
-            paint(out, w, h, newBox, eyeSource(!mirror, newBox[2] - newBox[0], steve, sw, sh), steve, sw, sh);
+            if (dw < 5) {
+                // very narrow head (chicken): the eye wraps around the corner. The iris sits on the outermost column of the
+                // front face, the white on the edge of the side face next to it.
+                int col = mirror ? dw - 1 : 0;
+                int[] irisBox = {fr[0] + col, fr[1] + nyr[0], fr[0] + col + 1, fr[1] + nyr[1]};
+                paint(out, w, h, irisBox, eyeSource(!mirror, 1, steve, sw, sh), steve, sw, sh);
+                int[] sideRect = mirror ? leftRect : rightRect;       // the viewer's-left eye is the mob's right eye
+                if (sideRect != null) {
+                    int[] sy = frac(ny0, ny1, sideRect[3] - sideRect[1]);
+                    int sx = mirror ? sideRect[0] : sideRect[2] - 1;      // the column that touches the front face
+                    int[] whiteBox = {sx, sideRect[1] + sy[0], sx + 1, sideRect[1] + sy[1]};
+                    paint(out, w, h, whiteBox, eyeWhite(!mirror, steve, sw, sh), steve, sw, sh);
+                }
+            } else {
+                paint(out, w, h, newBox, eyeSource(!mirror, newBox[2] - newBox[0], steve, sw, sh), steve, sw, sh);
+            }
         }
     }
 
@@ -348,8 +370,9 @@ public final class SteveRemapper {
             Kind kind = kinds[i];
             int[] slots = classifySlots(c.rects());
             int frontIndex = -1;
-            // a body lying on its side (cow, pig, sheep, chicken...): its upward-facing side is the animal's back
-            boolean lyingBody = kind == Kind.BODY && Math.max(c.ex(), c.ez()) > 1.15f * c.ey();
+            // a body lying on its side (cow, pig, sheep, chicken...): its rear end (the face pointing +z) gets the pants
+            boolean lyingBody = kind == Kind.BODY && c.ez() > 1.15f * c.ey() && c.ez() >= c.ex();
+            int rightIndex = -1, leftIndex = -1;
             for (int k = 0; k < c.rects().size(); k++) {
                 int[] r = c.rects().get(k);
                 int slot = slots[k];
@@ -361,13 +384,15 @@ public final class SteveRemapper {
                     continue;
                 }
                 if (kind == Kind.HEAD && slot == FRONT && frontIndex < 0) frontIndex = k;
+                if (kind == Kind.HEAD && slot == RIGHT && rightIndex < 0) rightIndex = k;
+                if (kind == Kind.HEAD && slot == LEFT && leftIndex < 0) leftIndex = k;
 
                 int[] src = steveRect(kind, slot);
-                boolean dorsal = lyingBody && c.normals() != null && k < c.normals().size() && c.normals().get(k)[1] < -0.5f;
+                boolean dorsal = lyingBody && c.normals() != null && k < c.normals().size() && c.normals().get(k)[2] > 0.5f;
                 // Steve's top/bottom strips are tiny (8x4). On animals the large back/belly is often a "top" or
                 // "bottom" face, so when the target is much bigger, borrow the big front/back face instead.
                 if (dorsal) {
-                    src = PANTS;                                   // backs are pants, not shirt
+                    src = PANTS;                                   // the butt is pants, not shirt
                 } else if (kind != Kind.HEAD && kind != Kind.HAT && kind != Kind.SKIN && (slot == TOP || slot == BOTTOM)) {
                     long dest = (long) (r[2] - r[0]) * (r[3] - r[1]);
                     long have = (long) src[2] * src[3];
@@ -376,7 +401,9 @@ public final class SteveRemapper {
                 paint(out, w, h, r, src, steve, sw, sh);
             }
             if (kind == Kind.HEAD && frontIndex >= 0) {
-                fixEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex), steve, sw, sh);
+                fixEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex),
+                        rightIndex >= 0 ? c.rects().get(rightIndex) : null,
+                        leftIndex >= 0 ? c.rects().get(leftIndex) : null, steve, sw, sh);
             }
         }
         return out;
