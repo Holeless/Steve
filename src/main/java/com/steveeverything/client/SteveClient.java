@@ -15,6 +15,8 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.animal.Sheep;
+import net.minecraft.world.entity.animal.Turtle;
 import net.minecraft.world.entity.monster.Spider;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
@@ -79,11 +81,14 @@ public final class SteveClient {
         LivingEntityRenderer<T, M> renderer = event.getRenderer();
         if (living instanceof Spider) removeSpiderEyes(renderer);   // spider + cave spider only; the enderman's eyes stay
 
+        // mobs whose head always becomes a properly sized mini Steve head (so the eyes are never squashed)
+        boolean customHead = living instanceof Sheep || living instanceof Turtle;
+
         ResourceLocation texture = null;
         try {
             texture = renderer.getTextureLocation(entity);
             if (texture == null || !DONE.add(texture)) return;
-            steveify(texture, renderer);
+            steveify(texture, renderer, customHead);
         } catch (Throwable t) {
             LOGGER.warn("Could not turn {} into Steve; leaving it vanilla", texture, t);
         }
@@ -116,7 +121,7 @@ public final class SteveClient {
     }
 
     // ------------------------------------------------------------------ the work
-    private static void steveify(ResourceLocation texture, LivingEntityRenderer<?, ?> renderer) throws Exception {
+    private static void steveify(ResourceLocation texture, LivingEntityRenderer<?, ?> renderer, boolean customHead) throws Exception {
         Minecraft mc = Minecraft.getInstance();
         ResourceManager resources = mc.getResourceManager();
 
@@ -134,15 +139,16 @@ public final class SteveClient {
         List<SteveRemapper.CubeInfo> cubes = scan.cubes();
         if (cubes.isEmpty()) return;
 
-        // heads too small for Steve's face are left transparent in the texture and drawn as a mini Steve head by a layer
-        Set<Integer> miniIndices = SteveRemapper.miniHeadCubes(cubes);
+        // heads too small for Steve's face (or always, for sheep/turtle) are left transparent in the texture
+        // and drawn as a mini Steve head by a layer
+        Set<Integer> miniIndices = SteveRemapper.miniHeadCubes(cubes, customHead);
         if (!miniIndices.isEmpty()) {
             Set<ModelPart.Cube> miniCubes = new HashSet<>();
             for (int i : miniIndices) miniCubes.add(scan.refs().get(i));
             attachMiniHeads(renderer, miniCubes);
         }
 
-        int[] pixels = SteveRemapper.remap(cubes, w, h, stevePixels, steveW, steveH);
+        int[] pixels = SteveRemapper.remap(cubes, w, h, stevePixels, steveW, steveH, customHead);
         NativeImage result = new NativeImage(w, h, true);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
@@ -169,7 +175,17 @@ public final class SteveClient {
                     px[y * steveW + x] = image.getPixelRGBA(x, y);
                 }
             }
+            SteveRemapper.fillHeadBottom(px, steveW, steveH);
             stevePixels = px;
+
+            // corrected skin (head bottom filled in) for the mini heads
+            NativeImage fixed = new NativeImage(steveW, steveH, true);
+            for (int y = 0; y < steveH; y++) {
+                for (int x = 0; x < steveW; x++) {
+                    fixed.setPixelRGBA(x, y, px[y * steveW + x]);
+                }
+            }
+            Minecraft.getInstance().getTextureManager().register(MiniHeadLayer.SKIN, new DynamicTexture(fixed));
             return true;
         } catch (Exception e) {
             LOGGER.error("Could not read {}", STEVE_SKIN, e);

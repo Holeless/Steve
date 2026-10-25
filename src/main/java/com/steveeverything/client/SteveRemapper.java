@@ -73,6 +73,20 @@ public final class SteveRemapper {
         };
     }
 
+    /**
+     * Steve's head underside is black/empty on most skins; fill it with his skin color (sampled from the forehead).
+     * Call once on the loaded skin pixels, before they are used for anything.
+     */
+    public static void fillHeadBottom(int[] steve, int sw, int sh) {
+        double sc = sw / 64.0;
+        int sx = Math.max(0, Math.min(sw - 1, (int) (11 * sc + sc / 2)));
+        int sy = Math.max(0, Math.min(sh - 1, (int) (11 * sc + sc / 2)));
+        int skin = steve[sy * sw + sx] | 0xFF000000;              // force opaque; byte order doesn't matter for this
+        int x0 = (int) (16 * sc), x1 = Math.min(sw, (int) (24 * sc));
+        int y0 = 0, y1 = Math.min(sh, (int) (8 * sc));
+        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) steve[y * sw + x] = skin;
+    }
+
     // ------------------------------------------------------------------ Steve's eyes (face = {8,8,8,8} on the skin)
     // Eye row is face row 4 (y = 12). Viewer's-left eye is face columns 1-2 (x = 9..10), viewer's-right eye 5-6 (x = 13..14).
     // Face row 3 (y = 11) is plain forehead skin, used to cover up an eye that has been moved.
@@ -370,6 +384,23 @@ public final class SteveRemapper {
         }
     }
 
+    // ------------------------------------------------------------------ tiny head-less models (endermite, silverfish)
+    private static final float POOR_HEAD_MIN = 3f / 16f;      // blocks: a head thinner than this can't show a face
+    private static final float SMALL_MODEL = 12f / 16f;       // blocks: head-less models up to this size get a mini head
+
+    /** A tiny model with no part named "head" (endermite, silverfish): its unnamed segments should all be plain shirt. */
+    private static boolean headlessSmall(List<CubeInfo> cubes) {
+        float x0 = Float.MAX_VALUE, x1 = -Float.MAX_VALUE, y0 = Float.MAX_VALUE, y1 = -Float.MAX_VALUE;
+        float z0 = Float.MAX_VALUE, z1 = -Float.MAX_VALUE;
+        for (CubeInfo c : cubes) {
+            if (classifyByName(c.path()) == Kind.HEAD) return false;
+            x0 = Math.min(x0, c.cx() - c.ex() / 2f); x1 = Math.max(x1, c.cx() + c.ex() / 2f);
+            y0 = Math.min(y0, c.cy() - c.ey() / 2f); y1 = Math.max(y1, c.cy() + c.ey() / 2f);
+            z0 = Math.min(z0, c.cz() - c.ez() / 2f); z1 = Math.max(z1, c.cz() + c.ez() / 2f);
+        }
+        return Math.max(x1 - x0, Math.max(y1 - y0, z1 - z0)) <= SMALL_MODEL;
+    }
+
     // ------------------------------------------------------------------ which body part is every cube?
     static Kind[] classifyAll(List<CubeInfo> cubes) {
         float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
@@ -385,11 +416,14 @@ public final class SteveRemapper {
         float maxVolume = 0f;
         for (CubeInfo c : cubes) maxVolume = Math.max(maxVolume, volume(c));
 
+        boolean shirtOnly = headlessSmall(cubes);
+
         Kind[] kinds = new Kind[cubes.size()];
         for (int i = 0; i < kinds.length; i++) {
             CubeInfo c = cubes.get(i);
             Kind kind = classifyByName(c.path());
             boolean named = kind != null;
+            if (!named && shirtOnly) { kinds[i] = Kind.BODY; continue; }
             if (kind == null) kind = classifyByGeometry(c, minY, maxY);
             // an unnamed tiny cube (chicken "red_thing", odd mod parts) is an add-on like a wattle: bare skin
             if (!named && volume(c) < 0.035f * maxVolume) kind = Kind.SKIN;
@@ -402,15 +436,21 @@ public final class SteveRemapper {
     }
 
     // ------------------------------------------------------------------ heads that are too small for Steve's face
-    private static final float POOR_HEAD_MIN = 3f / 16f;      // blocks: a head thinner than this can't show a face
-    private static final float SMALL_MODEL = 12f / 16f;       // blocks: head-less models up to this size get a mini head
-
     /** Indices of cubes that should be hidden and replaced by a mini Steve head drawn by a render layer. */
     public static Set<Integer> miniHeadCubes(List<CubeInfo> cubes) {
-        return miniHeadCubes(cubes, classifyAll(cubes));
+        return miniHeadCubes(cubes, false);
+    }
+
+    /** @param allHeads true = every head cube gets a mini head (sheep, turtle), not just the too-small ones */
+    public static Set<Integer> miniHeadCubes(List<CubeInfo> cubes, boolean allHeads) {
+        return miniHeadCubes(cubes, classifyAll(cubes), allHeads);
     }
 
     static Set<Integer> miniHeadCubes(List<CubeInfo> cubes, Kind[] kinds) {
+        return miniHeadCubes(cubes, kinds, false);
+    }
+
+    static Set<Integer> miniHeadCubes(List<CubeInfo> cubes, Kind[] kinds, boolean allHeads) {
         Set<Integer> out = new HashSet<>();
         boolean namedHead = false;
         for (int i = 0; i < cubes.size(); i++) {
@@ -420,7 +460,7 @@ public final class SteveRemapper {
             if (kinds[i] != Kind.HEAD) continue;
             // cod, salmon, parrot...: a face that is tiny or very long and thin turns Steve's face into mush
             float lo = Math.min(c.ex(), c.ey()), hi = Math.max(c.ex(), c.ey());
-            if (lo < POOR_HEAD_MIN - 0.001f || hi > 2f * lo + 0.001f) out.add(i);
+            if (allHeads || lo < POOR_HEAD_MIN - 0.001f || hi > 2f * lo + 0.001f) out.add(i);
         }
         if (namedHead) return out;
 
@@ -459,11 +499,16 @@ public final class SteveRemapper {
      * @return a w*h pixel array; areas the model never uses stay 0 (transparent)
      */
     public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh) {
+        return remap(cubes, w, h, steve, sw, sh, false);
+    }
+
+    public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh, boolean allHeads) {
         int[] out = new int[w * h];
         if (cubes.isEmpty()) return out;
 
         Kind[] kinds = classifyAll(cubes);
-        Set<Integer> mini = miniHeadCubes(cubes, kinds);     // these get a mini Steve head layer instead, so stay transparent
+        Set<Integer> mini = miniHeadCubes(cubes, kinds, allHeads);     // these get a mini Steve head layer instead, so stay transparent
+        boolean shirtOnly = headlessSmall(cubes);
 
         float midX = 0f, midY = 0f, midZ = 0f;
         for (CubeInfo c : cubes) { midX += c.cx(); midY += c.cy(); midZ += c.cz(); }
@@ -478,7 +523,7 @@ public final class SteveRemapper {
             int[] slots = classifySlots(c.rects());
             int frontIndex = -1;
             // a body lying on its side (cow, pig, sheep, chicken...): its rear end (the face pointing +z) gets the pants
-            boolean lyingBody = kind == Kind.BODY && c.ez() > 1.15f * c.ey() && c.ez() >= c.ex();
+            boolean lyingBody = !shirtOnly && kind == Kind.BODY && c.ez() > 1.15f * c.ey() && c.ez() >= c.ex();
             int rightIndex = -1, leftIndex = -1;
             // long thin limbs that stick out sideways (spider legs): the shoe belongs at the tip
             boolean sidewaysLeg = false;

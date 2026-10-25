@@ -28,13 +28,15 @@ import java.util.WeakHashMap;
 
 /**
  * Draws a small Steve head (his real skin, head box) in place of cubes the texture remap left transparent because
- * Steve's face can't be stretched onto them (cod, salmon, parrot heads, endermite and silverfish segments...).
- * It follows the animated pose of the cube it replaces.
+ * Steve's face can't be stretched onto them (cod, salmon, parrot heads, endermite and silverfish segments, sheep, turtle...).
+ * It follows the animated pose of the cube it replaces. It uses a corrected copy of Steve's skin (head bottom filled in)
+ * that SteveClient registers under SKIN.
  */
 final class MiniHeadLayer<T extends LivingEntity, M extends EntityModel<T>> extends RenderLayer<T, M> {
-    private static final ResourceLocation STEVE_SKIN =
-            ResourceLocation.fromNamespaceAndPath(SteveEverything.MOD_ID, "textures/steve.png");
-    private static final float MIN_SIDE = 2f, MAX_SIDE = 6f;     // pixels
+    /** Dynamic texture registered by SteveClient.loadSteve(). */
+    static final ResourceLocation SKIN =
+            ResourceLocation.fromNamespaceAndPath(SteveEverything.MOD_ID, "dynamic/steve_filled");
+    private static final float MIN_SIDE = 2f, MAX_SIDE = 8f;     // pixels
 
     private static int skinW = 64, skinH = 64;
     private static ModelPart head;
@@ -77,7 +79,7 @@ final class MiniHeadLayer<T extends LivingEntity, M extends EntityModel<T>> exte
 
         ModelPart mini = head();
         List<ModelPart> parts = roots.computeIfAbsent(getParentModel(), ModelScanner::rootParts);
-        VertexConsumer consumer = buffer.getBuffer(RenderType.entityCutoutNoCull(STEVE_SKIN));
+        VertexConsumer consumer = buffer.getBuffer(RenderType.entityCutoutNoCull(SKIN));
         int overlay = LivingEntityRenderer.getOverlayCoords(entity, 0f);
         Set<ModelPart.Cube> seen = Collections.newSetFromMap(new IdentityHashMap<>());
 
