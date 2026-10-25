@@ -55,9 +55,11 @@ public final class SteveClient {
         handle(event);
     }
 
+    @SuppressWarnings("unchecked")
     private static <T extends LivingEntity, M extends EntityModel<T>> void handle(RenderLivingEvent.Pre<T, M> event) {
-        T entity = event.getEntity();
-        if (!(entity instanceof Mob)) return;                 // players, armor stands etc. are left alone
+        LivingEntity living = event.getEntity();
+        if (!(living instanceof Mob)) return;                 // players, armor stands etc. are left alone
+        T entity = (T) living;
 
         LivingEntityRenderer<T, M> renderer = event.getRenderer();
         ResourceLocation texture = null;
