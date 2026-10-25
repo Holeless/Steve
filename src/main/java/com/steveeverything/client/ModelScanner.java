@@ -69,20 +69,24 @@ final class ModelScanner {
             minZ = Math.min(minZ, p[2]); maxZ = Math.max(maxZ, p[2]);
         }
 
+        List<float[]> allN = new ArrayList<>(), allC = new ArrayList<>();   // every real quad: normal + center (flat-plane detection)
         List<int[]> rects = new ArrayList<>();
         List<float[]> normals = new ArrayList<>();      // one per rect: which way that face points (model space, y is down)
         List<float[]> axes = new ArrayList<>();         // one per rect: model-space direction of increasing u, then of increasing v
         for (int q = 0; q + 3 < v.size(); q += 4) {
             float u0 = Float.MAX_VALUE, u1 = -Float.MAX_VALUE, v0 = Float.MAX_VALUE, v1 = -Float.MAX_VALUE;
-            float nx = 0f, ny = 0f, nz = 0f;
+            float nx = 0f, ny = 0f, nz = 0f, qx = 0f, qy = 0f, qz = 0f;
             for (int k = 0; k < 4; k++) {
                 float[] p = v.get(q + k);
                 u0 = Math.min(u0, p[3]); u1 = Math.max(u1, p[3]);
                 v0 = Math.min(v0, p[4]); v1 = Math.max(v1, p[4]);
                 nx += p[5]; ny += p[6]; nz += p[7];
+                qx += p[0]; qy += p[1]; qz += p[2];
             }
             int[] r = {Math.round(u0 * texW), Math.round(v0 * texH), Math.round(u1 * texW), Math.round(v1 * texH)};
             if (r[2] <= r[0] || r[3] <= r[1]) continue;          // zero-area face (flat planes)
+            allN.add(new float[]{nx / 4f, ny / 4f, nz / 4f});
+            allC.add(new float[]{qx / 4f, qy / 4f, qz / 4f});
             boolean duplicate = false;
             for (int[] o : rects) if (java.util.Arrays.equals(o, r)) { duplicate = true; break; }
             if (!duplicate) {
@@ -93,9 +97,21 @@ final class ModelScanner {
         }
         if (rects.isEmpty()) return null;
 
+        // a flat plane (wing, ear, fin, tail...) has two opposite-facing quads in the very same plane, however it is rotated
+        boolean flat = false;
+        for (int i = 0; i < allN.size() && !flat; i++) {
+            for (int j = i + 1; j < allN.size(); j++) {
+                float[] a = allN.get(i), b = allN.get(j);
+                if (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] > -0.9f) continue;
+                float[] ca = allC.get(i), cb = allC.get(j);
+                float dist = Math.abs(a[0] * (ca[0] - cb[0]) + a[1] * (ca[1] - cb[1]) + a[2] * (ca[2] - cb[2]));
+                if (dist < 0.04f) { flat = true; break; }
+            }
+        }
+
         return new SteveRemapper.CubeInfo(path, rects,
                 (minX + maxX) / 2f, (minY + maxY) / 2f, (minZ + maxZ) / 2f,
-                maxX - minX, maxY - minY, maxZ - minZ, normals, axes);
+                maxX - minX, maxY - minY, maxZ - minZ, normals, axes, flat);
     }
 
     /** Which way (model space) texture u and v increase across the quad starting at vertex q. */

@@ -1,0 +1,7 @@
+{
+  "minecraft:sheep":     { "head": "mini" },
+  "minecraft:turtle":    { "head": "mini", "body": "belly_pants" },
+  "minecraft:allay":     { "head": "mini", "body": "plain", "parts": { "wing": "sleeve" } },
+  "minecraft:armadillo": { "head": "mini", "body": "belly_pants", "parts": { "ear": "skin", "tail": "skin" } },
+  "minecraft:axolotl":   { "body": "belly_pants", "parts": { "gill": "skin", "tail": "skin" } }
+}

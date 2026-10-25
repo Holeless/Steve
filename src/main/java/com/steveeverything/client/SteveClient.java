@@ -9,16 +9,13 @@ import net.minecraft.client.model.geom.ModelPart;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.layers.SpiderEyesLayer;
 import net.minecraft.client.renderer.texture.DynamicTexture;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
-import net.minecraft.world.entity.animal.Sheep;
-import net.minecraft.world.entity.animal.allay.Allay;
-import net.minecraft.world.entity.animal.armadillo.Armadillo;
-import net.minecraft.world.entity.animal.Turtle;
 import net.minecraft.world.entity.monster.Spider;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
@@ -66,6 +63,7 @@ public final class SteveClient {
             DONE.clear();
             stevePixels = null;
             MiniHeadLayer.reset();
+            MobStyles.reset();
         });
     }
 
@@ -83,16 +81,13 @@ public final class SteveClient {
         LivingEntityRenderer<T, M> renderer = event.getRenderer();
         if (living instanceof Spider) removeSpiderEyes(renderer);   // spider + cave spider only; the enderman's eyes stay
 
-        // mobs whose head always becomes a properly sized mini Steve head (so the eyes are never squashed)
-        boolean customHead = living instanceof Sheep || living instanceof Turtle || living instanceof Allay
-                || living instanceof Armadillo;
-        int bodyMode = living instanceof Allay ? 2 : living instanceof Armadillo ? 1 : 0;
+        String mobId = BuiltInRegistries.ENTITY_TYPE.getKey(living.getType()).toString();
 
         ResourceLocation texture = null;
         try {
             texture = renderer.getTextureLocation(entity);
             if (texture == null || !DONE.add(texture)) return;
-            steveify(texture, renderer, customHead, bodyMode);
+            steveify(texture, renderer, mobId);
         } catch (Throwable t) {
             LOGGER.warn("Could not turn {} into Steve; leaving it vanilla", texture, t);
         }
@@ -125,7 +120,7 @@ public final class SteveClient {
     }
 
     // ------------------------------------------------------------------ the work
-    private static void steveify(ResourceLocation texture, LivingEntityRenderer<?, ?> renderer, boolean customHead, int bodyMode) throws Exception {
+    private static void steveify(ResourceLocation texture, LivingEntityRenderer<?, ?> renderer, String mobId) throws Exception {
         Minecraft mc = Minecraft.getInstance();
         ResourceManager resources = mc.getResourceManager();
 
@@ -143,16 +138,19 @@ public final class SteveClient {
         List<SteveRemapper.CubeInfo> cubes = scan.cubes();
         if (cubes.isEmpty()) return;
 
-        // heads too small for Steve's face (or always, for sheep/turtle) are left transparent in the texture
-        // and drawn as a mini Steve head by a layer
-        Set<Integer> miniIndices = SteveRemapper.miniHeadCubes(cubes, customHead);
+        SteveRemapper.Style style = MobStyles.get(resources, mobId);
+        if (DUMP) dump(mobId, texture, cubes, style);
+
+        // heads too small for Steve's face (or always, if the mob's style says so) are left transparent in the
+        // texture and drawn as a mini Steve head by a layer
+        Set<Integer> miniIndices = SteveRemapper.miniHeadCubes(cubes, style);
         if (!miniIndices.isEmpty()) {
             Set<ModelPart.Cube> miniCubes = new HashSet<>();
             for (int i : miniIndices) miniCubes.add(scan.refs().get(i));
             attachMiniHeads(renderer, miniCubes);
         }
 
-        int[] pixels = SteveRemapper.remap(cubes, w, h, stevePixels, steveW, steveH, customHead, bodyMode);
+        int[] pixels = SteveRemapper.remap(cubes, w, h, stevePixels, steveW, steveH, style);
         NativeImage result = new NativeImage(w, h, true);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
@@ -160,6 +158,25 @@ public final class SteveClient {
             }
         }
         mc.getTextureManager().register(texture, new DynamicTexture(result));
+    }
+
+    /** Start the game with -Dsteveeverything.dump=true to log every cube of every mob (for fixing bad mappings). */
+    private static final boolean DUMP = System.getProperty("steveeverything.dump") != null;
+
+    private static void dump(String mobId, ResourceLocation texture, List<SteveRemapper.CubeInfo> cubes,
+                             SteveRemapper.Style style) {
+        SteveRemapper.Kind[] kinds = SteveRemapper.classifyAll(cubes, style.parts());
+        LOGGER.info("[steveeverything] {} texture={} cubes={}", mobId, texture, cubes.size());
+        for (int i = 0; i < cubes.size(); i++) {
+            SteveRemapper.CubeInfo c = cubes.get(i);
+            LOGGER.info("[steveeverything]   {} -> {} size=({}, {}, {}) at=({}, {}, {}) flat={} faces={}",
+                    c.path(), kinds[i], f(c.ex() * 16), f(c.ey() * 16), f(c.ez() * 16),
+                    f(c.cx() * 16), f(c.cy() * 16), f(c.cz() * 16), c.flat(), c.rects().size());
+        }
+    }
+
+    private static String f(float v) {
+        return String.format(java.util.Locale.ROOT, "%.1f", v);
     }
 
     private static boolean loadSteve(ResourceManager resources) {

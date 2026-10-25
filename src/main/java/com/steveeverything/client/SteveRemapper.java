@@ -26,20 +26,45 @@ public final class SteveRemapper {
 
     public enum Kind { HEAD, HAT, BODY, ARM, LEG, SKIN, EYE }
 
+    /**
+     * Per-mob tweaks (loaded from mob_styles.json).
+     * allHeads: every head cube becomes a mini Steve head.
+     * bodyMode: 0 = default, 1 = shirt butt/top, 2 = plain shirt everywhere, 3 = shirt on top/sides/ends, pants on the belly.
+     * parts: part-name word -> body part it must look like ("ear" -> SKIN ...). Beats the automatic name matching.
+     */
+    public record Style(boolean allHeads, int bodyMode, Map<String, Kind> parts) {
+        public static final Style DEFAULT = new Style(false, 0, Map.of());
+    }
+
+    /** Forced body part for a cube path from a Style's part table, or null. */
+    static Kind overrideKind(String path, Map<String, Kind> parts) {
+        if (path == null || parts == null || parts.isEmpty()) return null;
+        String p = path.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT);
+        List<String> words = Arrays.asList(p.split("[^a-z]+"));
+        for (Map.Entry<String, Kind> e : parts.entrySet()) if (words.contains(e.getKey())) return e.getValue();
+        return null;
+    }
+
     /** One cuboid of a model: its name path, its UV rectangles in pixels and its size/position in model space. */
     public record CubeInfo(String path, List<int[]> rects,
                            float cx, float cy, float cz, float ex, float ey, float ez,
-                           List<float[]> normals, List<float[]> axes) {
+                           List<float[]> normals, List<float[]> axes, boolean flat) {
+        // flat: the cuboid is a zero-thickness plane (two opposite faces in the same spot), even if it is rotated.
         // normals: one {x,y,z} per rect, the way that face points (model space, y is down).
         // axes: one {ux,uy,uz, vx,vy,vz} per rect, the model-space directions in which texture u and v increase.
         public CubeInfo(String path, List<int[]> rects, float cx, float cy, float cz, float ex, float ey, float ez,
                         List<float[]> normals) {
-            this(path, rects, cx, cy, cz, ex, ey, ez, normals, null);
+            this(path, rects, cx, cy, cz, ex, ey, ez, normals, null, false);
+        }
+
+        public CubeInfo(String path, List<int[]> rects, float cx, float cy, float cz, float ex, float ey, float ez,
+                        List<float[]> normals, List<float[]> axes) {
+            this(path, rects, cx, cy, cz, ex, ey, ez, normals, axes, false);
         }
 
         /** Without face normals/axes (tests, simple callers). */
         public CubeInfo(String path, List<int[]> rects, float cx, float cy, float cz, float ex, float ey, float ez) {
-            this(path, rects, cx, cy, cz, ex, ey, ez, null, null);
+            this(path, rects, cx, cy, cz, ex, ey, ez, null, null, false);
         }
     }
 
@@ -412,6 +437,10 @@ public final class SteveRemapper {
 
     // ------------------------------------------------------------------ which body part is every cube?
     static Kind[] classifyAll(List<CubeInfo> cubes) {
+        return classifyAll(cubes, Map.of());
+    }
+
+    static Kind[] classifyAll(List<CubeInfo> cubes, Map<String, Kind> parts) {
         float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         for (CubeInfo c : cubes) {
             minY = Math.min(minY, c.cy() - c.ey() / 2f);
@@ -430,6 +459,8 @@ public final class SteveRemapper {
         Kind[] kinds = new Kind[cubes.size()];
         for (int i = 0; i < kinds.length; i++) {
             CubeInfo c = cubes.get(i);
+            Kind forced = overrideKind(c.path(), parts);
+            if (forced != null) { kinds[i] = forced; continue; }
             Kind kind = classifyByName(c.path());
             boolean named = kind != null;
             if (!named && shirtOnly) { kinds[i] = Kind.BODY; continue; }
@@ -453,6 +484,10 @@ public final class SteveRemapper {
     /** @param allHeads true = every head cube gets a mini head (sheep, turtle), not just the too-small ones */
     public static Set<Integer> miniHeadCubes(List<CubeInfo> cubes, boolean allHeads) {
         return miniHeadCubes(cubes, classifyAll(cubes), allHeads);
+    }
+
+    public static Set<Integer> miniHeadCubes(List<CubeInfo> cubes, Style style) {
+        return miniHeadCubes(cubes, classifyAll(cubes, style.parts()), style.allHeads());
     }
 
     static Set<Integer> miniHeadCubes(List<CubeInfo> cubes, Kind[] kinds) {
@@ -521,12 +556,18 @@ public final class SteveRemapper {
      */
     public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh,
                               boolean allHeads, int bodyMode) {
+        return remap(cubes, w, h, steve, sw, sh, new Style(allHeads, bodyMode, Map.of()));
+    }
+
+    public static int[] remap(List<CubeInfo> cubes, int w, int h, int[] steve, int sw, int sh, Style style) {
+        boolean allHeads = style.allHeads();
+        int bodyMode = style.bodyMode();
         boolean plainBody = bodyMode == 2, shirtButt = bodyMode >= 1;
         List<int[][]> late = new ArrayList<>();
         int[] out = new int[w * h];
         if (cubes.isEmpty()) return out;
 
-        Kind[] kinds = classifyAll(cubes);
+        Kind[] kinds = classifyAll(cubes, style.parts());
         Set<Integer> mini = miniHeadCubes(cubes, kinds, allHeads);     // these get a mini Steve head layer instead, so stay transparent
         boolean shirtOnly = headlessSmall(cubes);
 
@@ -556,7 +597,7 @@ public final class SteveRemapper {
             int rightIndex = -1, leftIndex = -1;
             // zero-thickness planes (allay wings): front and back faces sit in the same plane and z-fight each other,
             // so only the front one is painted; the back stays transparent and the front shows from both sides
-            boolean flat = Math.min(c.ex(), Math.min(c.ey(), c.ez())) < FLAT_MAX;
+            boolean flat = c.flat() || Math.min(c.ex(), Math.min(c.ey(), c.ez())) < FLAT_MAX;
             // long thin limbs that stick out sideways (spider legs): the shoe belongs at the tip
             boolean sidewaysLeg = false;
             if (kind == Kind.LEG) {
@@ -598,10 +639,13 @@ public final class SteveRemapper {
                 int[] src = steveRect(kind, slot);
                 boolean dorsalFace = lyingBody && c.normals() != null && k < c.normals().size() && c.normals().get(k)[2] > 0.5f;
                 boolean dorsal = dorsalFace && !shirtButt;
+                boolean belly = slot == BOTTOM;
                 // Steve's top/bottom strips are tiny (8x4). On animals the large back/belly is often a "top" or
                 // "bottom" face, so when the target is much bigger, borrow the big front/back face instead.
                 if (plainBody && kind == Kind.BODY) {
                     src = steveRect(kind, FRONT);
+                } else if (bodyMode == 3 && kind == Kind.BODY && belly) {
+                    src = PANTS;                                   // belly = pants, everything else shirt
                 } else if (dorsal) {
                     src = PANTS;
                 } else if (kind == Kind.BODY && shirtButt && dorsalFace) {
@@ -615,7 +659,7 @@ public final class SteveRemapper {
                     if (dest > 2 * have) src = steveRect(kind, slot == TOP ? FRONT : BACK);
                 }
                 paint(out, w, h, r, src, steve, sw, sh);
-                if (kind == Kind.BODY && shirtButt && (slot == TOP || dorsalFace)) late.add(new int[][]{r, src});
+                if (kind == Kind.BODY && shirtButt && (bodyMode == 3 || slot == TOP || dorsalFace)) late.add(new int[][]{r, src});
             }
             if (kind == Kind.HEAD && frontIndex >= 0) {
                 fixEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex),
