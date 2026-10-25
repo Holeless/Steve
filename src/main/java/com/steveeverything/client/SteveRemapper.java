@@ -27,10 +27,17 @@ public final class SteveRemapper {
     /** One cuboid of a model: its name path, its UV rectangles in pixels and its size/position in model space. */
     public record CubeInfo(String path, List<int[]> rects,
                            float cx, float cy, float cz, float ex, float ey, float ez,
-                           List<float[]> normals) {
-        /** Without face normals (tests, simple callers). */
+                           List<float[]> normals, List<float[]> axes) {
+        // normals: one {x,y,z} per rect, the way that face points (model space, y is down).
+        // axes: one {ux,uy,uz, vx,vy,vz} per rect, the model-space directions in which texture u and v increase.
+        public CubeInfo(String path, List<int[]> rects, float cx, float cy, float cz, float ex, float ey, float ez,
+                        List<float[]> normals) {
+            this(path, rects, cx, cy, cz, ex, ey, ez, normals, null);
+        }
+
+        /** Without face normals/axes (tests, simple callers). */
         public CubeInfo(String path, List<int[]> rects, float cx, float cy, float cz, float ex, float ey, float ez) {
-            this(path, rects, cx, cy, cz, ex, ey, ez, null);
+            this(path, rects, cx, cy, cz, ex, ey, ez, null, null);
         }
     }
 
@@ -216,6 +223,43 @@ public final class SteveRemapper {
         }
     }
 
+    /**
+     * Like paint(), but the source is turned a quarter turn: the source's vertical axis (waist -> shoe) runs along the
+     * destination's long axis. Used for long thin limbs such as spider legs so the shoe ends up at the tip.
+     */
+    private static void paintAlong(int[] out, int w, int h, int[] r, int[] src, int[] steve, int sw, int sh,
+                                   boolean alongU, boolean tipAtHighEnd) {
+        int dw = r[2] - r[0], dh = r[3] - r[1];
+        if (dw <= 0 || dh <= 0) return;
+        double sc = sw / 64.0;
+        double sx0 = src[0] * sc, sy0 = src[1] * sc, sW = src[2] * sc, sH = src[3] * sc;
+        for (int j = 0; j < dh; j++) {
+            int dy = r[1] + j;
+            if (dy < 0 || dy >= h) continue;
+            for (int i = 0; i < dw; i++) {
+                int dx = r[0] + i;
+                if (dx < 0 || dx >= w) continue;
+                double along = alongU ? (i + 0.5) / dw : (j + 0.5) / dh;
+                double across = alongU ? (j + 0.5) / dh : (i + 0.5) / dw;
+                if (!tipAtHighEnd) along = 1.0 - along;
+                int sy = Math.max(0, Math.min(sh - 1, (int) Math.floor(sy0 + along * sH)));
+                int sx = Math.max(0, Math.min(sw - 1, (int) Math.floor(sx0 + across * sW)));
+                out[dy * w + dx] = steve[sy * sw + sx];
+            }
+        }
+    }
+
+    /** 0 = this face is not a long side of a horizontal limb, 1 = long along texture u, 2 = long along texture v. */
+    private static int longAxisMode(CubeInfo c, int k) {
+        if (c.axes() == null || k >= c.axes().size()) return 0;
+        int[] r = c.rects().get(k);
+        int rw = r[2] - r[0], rh = r[3] - r[1];
+        float[] ax = c.axes().get(k);
+        if (rw >= 2 * rh && Math.abs(ax[1]) < 0.9f) return 1;      // model y is vertical: ignore limbs pointing up/down
+        if (rh >= 2 * rw && Math.abs(ax[4]) < 0.9f) return 2;
+        return 0;
+    }
+
     private static float volume(CubeInfo c) {
         return Math.max(1e-6f, c.ex() * c.ey() * c.ez());
     }
@@ -350,6 +394,10 @@ public final class SteveRemapper {
         float maxVolume = 0f;
         for (CubeInfo c : cubes) maxVolume = Math.max(maxVolume, volume(c));
 
+        float midX = 0f, midY = 0f, midZ = 0f;
+        for (CubeInfo c : cubes) { midX += c.cx(); midY += c.cy(); midZ += c.cz(); }
+        midX /= cubes.size(); midY /= cubes.size(); midZ /= cubes.size();
+
         int n = cubes.size();
         Kind[] kinds = new Kind[n];
         for (int i = 0; i < n; i++) {
@@ -373,6 +421,11 @@ public final class SteveRemapper {
             // a body lying on its side (cow, pig, sheep, chicken...): its rear end (the face pointing +z) gets the pants
             boolean lyingBody = kind == Kind.BODY && c.ez() > 1.15f * c.ey() && c.ez() >= c.ex();
             int rightIndex = -1, leftIndex = -1;
+            // long thin limbs that stick out sideways (spider legs): the shoe belongs at the tip
+            boolean sidewaysLeg = false;
+            if (kind == Kind.LEG) {
+                for (int k = 0; k < c.rects().size(); k++) if (longAxisMode(c, k) != 0) { sidewaysLeg = true; break; }
+            }
             for (int k = 0; k < c.rects().size(); k++) {
                 int[] r = c.rects().get(k);
                 int slot = slots[k];
@@ -381,6 +434,24 @@ public final class SteveRemapper {
                     // model -x is the mob's right = the viewer's left when looking at its face
                     boolean viewerLeft = c.cx() < 1e-3f;
                     paint(out, w, h, r, eyeSource(viewerLeft, r[2] - r[0], steve, sw, sh), steve, sw, sh);
+                    continue;
+                }
+                if (sidewaysLeg) {
+                    int mode = longAxisMode(c, k);
+                    if (mode != 0) {
+                        float[] ax = c.axes().get(k);
+                        int o = mode == 1 ? 0 : 3;
+                        float outward = ax[o] * (c.cx() - midX) + ax[o + 1] * (c.cy() - midY) + ax[o + 2] * (c.cz() - midZ);
+                        paintAlong(out, w, h, r, steveRect(Kind.LEG, FRONT), steve, sw, sh, mode == 1, outward > 0f);
+                    } else {
+                        // the little square ends: the outer one is the sole of the shoe, the inner one is the top of the leg
+                        float outward = 0f;
+                        if (c.normals() != null && k < c.normals().size()) {
+                            float[] nrm = c.normals().get(k);
+                            outward = nrm[0] * (c.cx() - midX) + nrm[1] * (c.cy() - midY) + nrm[2] * (c.cz() - midZ);
+                        }
+                        paint(out, w, h, r, steveRect(Kind.LEG, outward > 0f ? BOTTOM : TOP), steve, sw, sh);
+                    }
                     continue;
                 }
                 if (kind == Kind.HEAD && slot == FRONT && frontIndex < 0) frontIndex = k;
@@ -393,6 +464,9 @@ public final class SteveRemapper {
                 // "bottom" face, so when the target is much bigger, borrow the big front/back face instead.
                 if (dorsal) {
                     src = PANTS;                                   // the butt is pants, not shirt
+                } else if (kind == Kind.BODY && (slot == TOP || slot == BOTTOM)) {
+                    // Steve's torso top has his neck on it; animals shouldn't wear that, so use plain shirt instead
+                    src = steveRect(kind, slot == TOP ? FRONT : BACK);
                 } else if (kind != Kind.HEAD && kind != Kind.HAT && kind != Kind.SKIN && (slot == TOP || slot == BOTTOM)) {
                     long dest = (long) (r[2] - r[0]) * (r[3] - r[1]);
                     long have = (long) src[2] * src[3];

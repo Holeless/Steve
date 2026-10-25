@@ -56,6 +56,7 @@ final class ModelScanner {
 
         List<int[]> rects = new ArrayList<>();
         List<float[]> normals = new ArrayList<>();      // one per rect: which way that face points (model space, y is down)
+        List<float[]> axes = new ArrayList<>();         // one per rect: model-space direction of increasing u, then of increasing v
         for (int q = 0; q + 3 < v.size(); q += 4) {
             float u0 = Float.MAX_VALUE, u1 = -Float.MAX_VALUE, v0 = Float.MAX_VALUE, v1 = -Float.MAX_VALUE;
             float nx = 0f, ny = 0f, nz = 0f;
@@ -72,13 +73,39 @@ final class ModelScanner {
             if (!duplicate) {
                 rects.add(r);
                 normals.add(new float[]{nx / 4f, ny / 4f, nz / 4f});
+                axes.add(axesOf(v, q, (u0 + u1) / 2f, (v0 + v1) / 2f));
             }
         }
         if (rects.isEmpty()) return null;
 
         return new SteveRemapper.CubeInfo(path, rects,
                 (minX + maxX) / 2f, (minY + maxY) / 2f, (minZ + maxZ) / 2f,
-                maxX - minX, maxY - minY, maxZ - minZ, normals);
+                maxX - minX, maxY - minY, maxZ - minZ, normals, axes);
+    }
+
+    /** Which way (model space) texture u and v increase across the quad starting at vertex q. */
+    private static float[] axesOf(List<float[]> v, int q, float uMid, float vMid) {
+        float[] uHi = new float[3], uLo = new float[3], vHi = new float[3], vLo = new float[3];
+        int nuHi = 0, nuLo = 0, nvHi = 0, nvLo = 0;
+        for (int k = 0; k < 4; k++) {
+            float[] p = v.get(q + k);
+            if (p[3] > uMid) { for (int a = 0; a < 3; a++) uHi[a] += p[a]; nuHi++; }
+            else { for (int a = 0; a < 3; a++) uLo[a] += p[a]; nuLo++; }
+            if (p[4] > vMid) { for (int a = 0; a < 3; a++) vHi[a] += p[a]; nvHi++; }
+            else { for (int a = 0; a < 3; a++) vLo[a] += p[a]; nvLo++; }
+        }
+        float[] out = new float[6];
+        direction(uHi, nuHi, uLo, nuLo, out, 0);
+        direction(vHi, nvHi, vLo, nvLo, out, 3);
+        return out;
+    }
+
+    private static void direction(float[] hi, int nHi, float[] lo, int nLo, float[] out, int at) {
+        if (nHi == 0 || nLo == 0) return;
+        float x = hi[0] / nHi - lo[0] / nLo, y = hi[1] / nHi - lo[1] / nLo, z = hi[2] / nHi - lo[2] / nLo;
+        float len = (float) Math.sqrt(x * x + y * y + z * z);
+        if (len < 1e-6f) return;
+        out[at] = x / len; out[at + 1] = y / len; out[at + 2] = z / len;
     }
 
     // ---------------------------------------------------------------- reflection helpers

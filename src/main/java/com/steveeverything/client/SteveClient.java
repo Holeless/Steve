@@ -6,6 +6,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.EntityModel;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.client.renderer.entity.layers.SpiderEyesLayer;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
@@ -13,16 +14,20 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.monster.Spider;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
 import net.neoforged.neoforge.client.event.RenderLivingEvent;
 import org.slf4j.Logger;
 
 import java.io.InputStream;
+import java.lang.reflect.Field;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * The first time a mob with a given texture is about to be drawn, we build a Steve version of that texture
@@ -36,6 +41,10 @@ public final class SteveClient {
 
     /** Textures we have already replaced (cleared whenever resources reload). */
     private static final Set<ResourceLocation> DONE = new HashSet<>();
+
+    /** Renderers whose red spider-eyes layer we have already taken off. */
+    private static final Set<Object> EYES_REMOVED = Collections.newSetFromMap(new WeakHashMap<>());
+    private static Field layersField;
 
     private static int[] stevePixels;
     private static int steveW, steveH;
@@ -62,6 +71,8 @@ public final class SteveClient {
         T entity = (T) living;
 
         LivingEntityRenderer<T, M> renderer = event.getRenderer();
+        if (living instanceof Spider) removeSpiderEyes(renderer);   // spider + cave spider only; the enderman's eyes stay
+
         ResourceLocation texture = null;
         try {
             texture = renderer.getTextureLocation(entity);
@@ -69,6 +80,21 @@ public final class SteveClient {
             steveify(texture, renderer.getModel());
         } catch (Throwable t) {
             LOGGER.warn("Could not turn {} into Steve; leaving it vanilla", texture, t);
+        }
+    }
+
+    /** The red glowing eyes are a render layer; take it off the renderer's layer list (once per renderer). */
+    private static void removeSpiderEyes(LivingEntityRenderer<?, ?> renderer) {
+        if (!EYES_REMOVED.add(renderer)) return;
+        try {
+            if (layersField == null) {
+                layersField = LivingEntityRenderer.class.getDeclaredField("layers");
+                layersField.setAccessible(true);
+            }
+            Object layers = layersField.get(renderer);
+            if (layers instanceof List<?> list) list.removeIf(layer -> layer instanceof SpiderEyesLayer);
+        } catch (Throwable t) {
+            LOGGER.warn("Could not remove the spider eyes layer", t);
         }
     }
 
