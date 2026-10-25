@@ -112,6 +112,40 @@ public final class SteveRemapper {
         for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) steve[y * sw + x] = skin;
     }
 
+    // ------------------------------------------------------------------ plain shirt (no collar, no belt)
+    private static int[] shirtFor, shirtRect;
+
+    private static int rgbDist(int a, int b) {
+        return Math.abs((a & 0xFF) - (b & 0xFF)) + Math.abs(((a >> 8) & 0xFF) - ((b >> 8) & 0xFF))
+                + Math.abs(((a >> 16) & 0xFF) - ((b >> 16) & 0xFF));
+    }
+
+    /**
+     * Steve's torso front has a skin-coloured collar at the top and a purple belt at the bottom. Stretched over a big
+     * animal back those show up as random brown and purple patches, so mobs that want "plain shirt" use only the
+     * longest run of torso rows that is all shirt colour. Found from the actual pixels, so any skin works.
+     */
+    static int[] plainShirt(int[] steve, int sw, int sh) {
+        if (shirtFor == steve && shirtRect != null) return shirtRect;
+        double sc = sw / 64.0;
+        java.util.function.IntBinaryOperator px = (x, y) -> steve[
+                Math.max(0, Math.min(sh - 1, (int) (y * sc + sc / 2))) * sw + Math.max(0, Math.min(sw - 1, (int) (x * sc + sc / 2)))];
+        int ref = px.applyAsInt(23, 26);                       // middle of the torso front (x 20..27, y 20..31)
+        int bestStart = 22, bestLen = 0, runStart = -1;
+        for (int y = 20; y <= 32; y++) {
+            boolean clean = y < 32;
+            for (int x = 20; clean && x < 28; x++) clean = rgbDist(px.applyAsInt(x, y), ref) <= 60;
+            if (clean) { if (runStart < 0) runStart = y; }
+            else if (runStart >= 0) {
+                if (y - runStart > bestLen) { bestLen = y - runStart; bestStart = runStart; }
+                runStart = -1;
+            }
+        }
+        shirtRect = bestLen >= 2 ? new int[]{20, bestStart, 8, bestLen} : new int[]{20, 22, 8, 8};
+        shirtFor = steve;
+        return shirtRect;
+    }
+
     // ------------------------------------------------------------------ Steve's eyes (face = {8,8,8,8} on the skin)
     // Eye row is face row 4 (y = 12). Viewer's-left eye is face columns 1-2 (x = 9..10), viewer's-right eye 5-6 (x = 13..14).
     // Face row 3 (y = 11) is plain forehead skin, used to cover up an eye that has been moved.
@@ -563,6 +597,7 @@ public final class SteveRemapper {
         boolean allHeads = style.allHeads();
         int bodyMode = style.bodyMode();
         boolean plainBody = bodyMode == 2, shirtButt = bodyMode >= 1;
+        int[] shirt = bodyMode >= 1 ? plainShirt(steve, sw, sh) : steveRect(Kind.BODY, FRONT);
         List<int[][]> late = new ArrayList<>();
         int[] out = new int[w * h];
         if (cubes.isEmpty()) return out;
@@ -643,9 +678,11 @@ public final class SteveRemapper {
                 // Steve's top/bottom strips are tiny (8x4). On animals the large back/belly is often a "top" or
                 // "bottom" face, so when the target is much bigger, borrow the big front/back face instead.
                 if (plainBody && kind == Kind.BODY) {
-                    src = steveRect(kind, FRONT);
+                    src = shirt;
                 } else if (bodyMode == 3 && kind == Kind.BODY && belly) {
                     src = PANTS;                                   // belly = pants, everything else shirt
+                } else if (bodyMode >= 1 && kind == Kind.BODY) {
+                    src = shirt;                                   // never the collar or the belt
                 } else if (dorsal) {
                     src = PANTS;
                 } else if (kind == Kind.BODY && shirtButt && dorsalFace) {
