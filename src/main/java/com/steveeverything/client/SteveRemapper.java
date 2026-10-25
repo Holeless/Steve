@@ -2,23 +2,27 @@ package com.steveeverything.client;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * The "basic algorithm". Pure Java, no Minecraft classes, so it is easy to test.
  *
- * For every cuboid of a mob model we do three things:
- *   1. decide which body part of Steve it should look like (head / torso / arm / leg / bare skin),
+ * For every cuboid of a mob model we do these things:
+ *   1. decide which body part of Steve it should look like (head / torso / arm / leg / eye / bare skin),
  *      first from the part's name ("right_hind_leg" -> leg), then from where it sits in the model;
  *   2. work out which of the cuboid's six UV rectangles is which (top, bottom, right, front, left, back);
  *   3. copy the same face of Steve's matching body part into that rectangle, stretched with
- *      nearest-neighbour sampling so it stays crisp and pixelated.
+ *      nearest-neighbour sampling so it stays crisp and pixelated;
+ *   4. eyes: cuboids named "eye" get Steve's eye pixels, and if a beak/snout/nose sits in front of Steve's eyes
+ *      on a head, the eyes are moved to a spot that is actually visible.
  */
 public final class SteveRemapper {
     private SteveRemapper() {}
 
-    public enum Kind { HEAD, HAT, BODY, ARM, LEG, SKIN }
+    public enum Kind { HEAD, HAT, BODY, ARM, LEG, SKIN, EYE }
 
     /** One cuboid of a model: its name path, its UV rectangles in pixels and its size/position in model space. */
     public record CubeInfo(String path, List<int[]> rects,
@@ -31,7 +35,7 @@ public final class SteveRemapper {
     // {u, v, width, height, depth} of each body part's box on the skin.
     private static int[] box(Kind k) {
         return switch (k) {
-            case HEAD -> new int[]{0, 0, 8, 8, 8};
+            case HEAD, EYE -> new int[]{0, 0, 8, 8, 8};
             case HAT -> new int[]{32, 0, 8, 8, 8};     // second layer; transparent on the classic Steve skin
             case BODY -> new int[]{16, 16, 8, 12, 4};
             case ARM, SKIN -> new int[]{40, 16, 4, 12, 4};
@@ -54,7 +58,33 @@ public final class SteveRemapper {
         };
     }
 
+    // ------------------------------------------------------------------ Steve's eyes (face = {8,8,8,8} on the skin)
+    // Eye row is face row 4 (y = 12). Viewer's-left eye is face columns 1-2 (x = 9..10), viewer's-right eye 5-6 (x = 13..14).
+    // Face row 3 (y = 11) is plain forehead skin, used to cover up an eye that has been moved.
+    private static final int EYE_Y = 12, FOREHEAD_Y = 11, EYE_LEFT_X = 9, EYE_RIGHT_X = 13;
+    private static final float EYE_H = 1f / 8f;
+
+    private static int brightness(int[] steve, int sw, int sh, int x, int y) {
+        double sc = sw / 64.0;
+        int px = Math.max(0, Math.min(sw - 1, (int) (x * sc + sc / 2)));
+        int py = Math.max(0, Math.min(sh - 1, (int) (y * sc + sc / 2)));
+        int p = steve[py * sw + px];
+        return (p & 0xFF) + ((p >> 8) & 0xFF) + ((p >> 16) & 0xFF);   // byte order doesn't matter for a sum
+    }
+
+    /**
+     * Source rectangle {x, y, w, h} for one eye. When the target is 2+ texels wide we use both eye pixels (white + iris);
+     * when it is only 1 texel wide we use the darker one (the iris) so the eye still reads as an eye.
+     */
+    static int[] eyeSource(boolean viewerLeft, int destWidth, int[] steve, int sw, int sh) {
+        int x = viewerLeft ? EYE_LEFT_X : EYE_RIGHT_X;
+        if (destWidth >= 2) return new int[]{x, EYE_Y, 2, 1};
+        boolean firstDarker = brightness(steve, sw, sh, x, EYE_Y) <= brightness(steve, sw, sh, x + 1, EYE_Y);
+        return new int[]{firstDarker ? x : x + 1, EYE_Y, 1, 1};
+    }
+
     // ------------------------------------------------------------------ step 1: which body part?
+    private static final String[] EYE_W = {"eye", "eyeball", "pupil", "iris"};
     private static final String[] HAT_W = {"hat", "hair", "helmet", "hood", "cap", "headwear", "bonnet"};
     private static final String[] HEAD_W = {"head", "skull", "face", "cranium"};
     private static final String[] ARM_W = {"arm", "wing", "hand", "flipper", "fin", "shoulder", "sleeve", "claw", "pincer"};
@@ -62,7 +92,7 @@ public final class SteveRemapper {
     private static final String[] BODY_W = {"body", "torso", "chest", "belly", "abdomen", "thorax", "spine", "back", "rump",
             "hip", "pelvis", "shell", "saddle", "hump", "cloak", "cape", "robe", "jacket", "coat", "dress", "skirt"};
     private static final String[] SKIN_W = {"nose", "snout", "muzzle", "beak", "bill", "chin", "tongue", "mouth", "jaw", "ear",
-            "horn", "antler", "eye", "brow", "crest", "comb", "wattle", "trunk", "tusk", "mandible", "fang", "tooth", "teeth",
+            "horn", "antler", "eyebrow", "brow", "crest", "comb", "wattle", "trunk", "tusk", "mandible", "fang", "tooth", "teeth",
             "whisker", "tail", "tentacle", "antenna", "stinger", "spike", "thorn", "udder", "mane", "lip", "gill", "feather",
             "tuft", "neck", "bag", "sack", "pouch", "nostril", "ridge", "plate", "scale"};
 
@@ -95,7 +125,8 @@ public final class SteveRemapper {
             if (raw.isEmpty()) continue;
             String w = raw.length() > 3 && raw.endsWith("s") ? raw.substring(0, raw.length() - 1) : raw;
             int rank; Kind k;
-            if (has(HAT_W, w, false)) { rank = 0; k = Kind.HAT; }
+            if (has(EYE_W, w, false)) { rank = -1; k = Kind.EYE; }
+            else if (has(HAT_W, w, false)) { rank = 0; k = Kind.HAT; }
             else if (has(HEAD_W, w, true)) { rank = 1; k = Kind.HEAD; }
             else if (has(ARM_W, w, true)) { rank = 2; k = Kind.ARM; }
             else if (has(LEG_W, w, true)) { rank = 3; k = Kind.LEG; }
@@ -174,6 +205,76 @@ public final class SteveRemapper {
         return Math.max(1e-6f, c.ex() * c.ey() * c.ez());
     }
 
+    // ------------------------------------------------------------------ step 4: keep the eyes visible
+    /** Texel range {a, b} (relative to the face, b exclusive, at least 1 wide) for a fractional range of the face. */
+    private static int[] frac(float f0, float f1, int size) {
+        int a = Math.max(0, Math.min(size - 1, Math.round(f0 * size)));
+        int b = Math.max(a + 1, Math.min(size, Math.round(f1 * size)));
+        return new int[]{a, b};
+    }
+
+    /**
+     * Beaks, snouts and noses are cubes sitting in front of the head's face. They often cover the spot where Steve's
+     * eyes were just painted (chicken beak, pig snout, ...). For every eye that is covered we move it: first straight up
+     * to just above the covering cube, or, when there is no room above, sideways to just beside it.
+     * Fractions below are of the head's front face: x from the viewer's left, y from the top.
+     */
+    private static void relocateEyes(int[] out, int w, int h, int idx, List<CubeInfo> cubes, Kind[] kinds,
+                                     int[] fr, int[] steve, int sw, int sh) {
+        CubeInfo head = cubes.get(idx);
+        int dw = fr[2] - fr[0], dh = fr[3] - fr[1];
+        if (dw < 2 || dh < 2 || head.ex() <= 0f || head.ey() <= 0f) return;
+
+        float hx0 = head.cx() - head.ex() / 2f;
+        float hy0 = head.cy() - head.ey() / 2f;
+        float headFront = head.cz() - head.ez() / 2f;          // the mob faces -z
+        final float eps = 0.002f;                              // blocks
+
+        List<float[]> occluders = new ArrayList<>();
+        for (int j = 0; j < cubes.size(); j++) {
+            if (j == idx || kinds[j] != Kind.SKIN) continue;
+            CubeInfo s = cubes.get(j);
+            float sFront = s.cz() - s.ez() / 2f, sBack = s.cz() + s.ez() / 2f;
+            if (!(sFront < headFront - eps && sBack >= headFront - eps)) continue;   // must stick out of the face
+            float fx0 = (s.cx() - s.ex() / 2f - hx0) / head.ex();
+            float fy0 = (s.cy() - s.ey() / 2f - hy0) / head.ey();
+            float fx1 = fx0 + s.ex() / head.ex();
+            float fy1 = fy0 + s.ey() / head.ey();
+            if (fx1 > 0.02f && fx0 < 0.98f && fy1 > 0.02f && fy0 < 0.98f) occluders.add(new float[]{fx0, fx1, fy0, fy1});
+        }
+        if (occluders.isEmpty()) return;
+
+        float eyeH = Math.max(EYE_H, 1f / dh);
+        final float eyeX0 = 1f / 8f, eyeX1 = 3f / 8f, eyeY0 = 4f / 8f, eyeY1 = 5f / 8f;   // the left eye; the right one is its mirror
+
+        for (int side = 0; side < 2; side++) {
+            boolean mirror = side == 1;
+            float[] hit = null;
+            for (float[] o : occluders) {
+                float ox0 = mirror ? 1f - o[1] : o[0], ox1 = mirror ? 1f - o[0] : o[1];
+                if (ox0 < eyeX1 && ox1 > eyeX0 && o[2] < eyeY1 && o[3] > eyeY0) { hit = new float[]{ox0, ox1, o[2], o[3]}; break; }
+            }
+            if (hit == null) continue;
+
+            float nx0 = eyeX0, nx1 = eyeX1, ny0 = eyeY0, ny1 = eyeY1;
+            float top1 = hit[2], top0 = top1 - eyeH;
+            if (top0 >= 0f) { ny0 = top0; ny1 = top1; }                                  // above the beak/snout
+            else if (hit[0] - (eyeX1 - eyeX0) >= 0f) { nx1 = hit[0]; nx0 = nx1 - (eyeX1 - eyeX0); }   // beside it
+            else continue;                                                               // nowhere to go
+
+            int[] ox = frac(eyeX0, eyeX1, dw), oy = frac(eyeY0, eyeY1, dh);
+            int[] nxr = frac(nx0, nx1, dw), nyr = frac(ny0, ny1, dh);
+            if (mirror) {
+                ox = new int[]{dw - ox[1], dw - ox[0]};
+                nxr = new int[]{dw - nxr[1], dw - nxr[0]};
+            }
+            int[] oldBox = {fr[0] + ox[0], fr[1] + oy[0], fr[0] + ox[1], fr[1] + oy[1]};
+            int[] newBox = {fr[0] + nxr[0], fr[1] + nyr[0], fr[0] + nxr[1], fr[1] + nyr[1]};
+            paint(out, w, h, oldBox, new int[]{mirror ? EYE_RIGHT_X : EYE_LEFT_X, FOREHEAD_Y, 2, 1}, steve, sw, sh);
+            paint(out, w, h, newBox, eyeSource(!mirror, newBox[2] - newBox[0], steve, sw, sh), steve, sw, sh);
+        }
+    }
+
     /**
      * Build a Steve-ified version of a mob texture.
      *
@@ -194,19 +295,38 @@ public final class SteveRemapper {
         }
         // Horns, ears, udders etc. are often extra cubes inside the head/body part rather than parts of their own.
         // Remember the biggest cube of every part so such small add-ons can be recognised below.
-        java.util.Map<String, Float> biggest = new java.util.HashMap<>();
+        Map<String, Float> biggest = new HashMap<>();
         for (CubeInfo c : cubes) biggest.merge(c.path(), volume(c), Math::max);
 
-        for (CubeInfo c : cubes) {
+        int n = cubes.size();
+        Kind[] kinds = new Kind[n];
+        for (int i = 0; i < n; i++) {
+            CubeInfo c = cubes.get(i);
             Kind kind = classifyByName(c.path());
             if (kind == null) kind = classifyByGeometry(c, minY, maxY);
             if ((kind == Kind.HEAD || kind == Kind.BODY) && volume(c) < 0.12f * biggest.get(c.path())) {
                 kind = Kind.SKIN;
             }
+            kinds[i] = kind;
+        }
+
+        for (int i = 0; i < n; i++) {
+            CubeInfo c = cubes.get(i);
+            Kind kind = kinds[i];
             int[] slots = classifySlots(c.rects());
-            for (int i = 0; i < c.rects().size(); i++) {
-                int[] r = c.rects().get(i);
-                int slot = slots[i];
+            int frontIndex = -1;
+            for (int k = 0; k < c.rects().size(); k++) {
+                int[] r = c.rects().get(k);
+                int slot = slots[k];
+
+                if (kind == Kind.EYE) {
+                    // model -x is the mob's right = the viewer's left when looking at its face
+                    boolean viewerLeft = c.cx() < 1e-3f;
+                    paint(out, w, h, r, eyeSource(viewerLeft, r[2] - r[0], steve, sw, sh), steve, sw, sh);
+                    continue;
+                }
+                if (kind == Kind.HEAD && slot == FRONT && frontIndex < 0) frontIndex = k;
+
                 int[] src = steveRect(kind, slot);
                 // Steve's top/bottom strips are tiny (8x4). On animals the large back/belly is often a "top" or
                 // "bottom" face, so when the target is much bigger, borrow the big front/back face instead.
@@ -216,6 +336,9 @@ public final class SteveRemapper {
                     if (dest > 2 * have) src = steveRect(kind, slot == TOP ? FRONT : BACK);
                 }
                 paint(out, w, h, r, src, steve, sw, sh);
+            }
+            if (kind == Kind.HEAD && frontIndex >= 0) {
+                relocateEyes(out, w, h, i, cubes, kinds, c.rects().get(frontIndex), steve, sw, sh);
             }
         }
         return out;
