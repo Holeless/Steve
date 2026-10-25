@@ -276,6 +276,15 @@ public final class SteveRemapper {
         return 0;
     }
 
+    /** Thinner than this (blocks, about 0.6 px) counts as a flat plane whose two faces z-fight. */
+    private static final float FLAT_MAX = 0.04f;
+
+    private static boolean sameBox(CubeInfo a, CubeInfo b) {
+        final float e = 0.003f;
+        return Math.abs(a.cx() - b.cx()) < e && Math.abs(a.cy() - b.cy()) < e && Math.abs(a.cz() - b.cz()) < e
+                && Math.abs(a.ex() - b.ex()) < e && Math.abs(a.ey() - b.ey()) < e && Math.abs(a.ez() - b.ez()) < e;
+    }
+
     private static float volume(CubeInfo c) {
         return Math.max(1e-6f, c.ex() * c.ey() * c.ez());
     }
@@ -527,10 +536,19 @@ public final class SteveRemapper {
 
         int n = cubes.size();
 
+        // two cubes with the same position and size put their faces in the same plane and z-fight: keep only the first
+        boolean[] dup = new boolean[n];
+        for (int i = 1; i < n; i++) {
+            for (int j = 0; j < i; j++) {
+                if (dup[j] || mini.contains(j)) continue;
+                if (sameBox(cubes.get(i), cubes.get(j))) { dup[i] = true; break; }
+            }
+        }
+
         for (int i = 0; i < n; i++) {
             CubeInfo c = cubes.get(i);
             Kind kind = kinds[i];
-            if (mini.contains(i)) continue;
+            if (mini.contains(i) || dup[i]) continue;
             int[] slots = classifySlots(c.rects());
             int frontIndex = -1;
             // a body lying on its side (cow, pig, sheep, chicken...): its rear end (the face pointing +z) gets the pants
@@ -538,7 +556,7 @@ public final class SteveRemapper {
             int rightIndex = -1, leftIndex = -1;
             // zero-thickness planes (allay wings): front and back faces sit in the same plane and z-fight each other,
             // so only the front one is painted; the back stays transparent and the front shows from both sides
-            boolean flat = Math.min(c.ex(), Math.min(c.ey(), c.ez())) < 1e-3f;
+            boolean flat = Math.min(c.ex(), Math.min(c.ey(), c.ez())) < FLAT_MAX;
             // long thin limbs that stick out sideways (spider legs): the shoe belongs at the tip
             boolean sidewaysLeg = false;
             if (kind == Kind.LEG) {
@@ -548,13 +566,13 @@ public final class SteveRemapper {
                 int[] r = c.rects().get(k);
                 int slot = slots[k];
 
+                if (flat && slot != FRONT) continue;
                 if (kind == Kind.EYE) {
                     // model -x is the mob's right = the viewer's left when looking at its face
                     boolean viewerLeft = c.cx() < 1e-3f;
                     paint(out, w, h, r, eyeSource(viewerLeft, r[2] - r[0], steve, sw, sh), steve, sw, sh);
                     continue;
                 }
-                if (flat && slot != FRONT) continue;
                 if (sidewaysLeg) {
                     int mode = longAxisMode(c, k);
                     if (mode != 0) {
